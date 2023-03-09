@@ -22,7 +22,7 @@ type ExternalCache interface {
 	// SETNX is short for "SET if Not eXists".
 	// keyCreated must return true if value is set
 	SetNX(ctx context.Context, key string, value []byte, ttl time.Duration) (keyCreated bool, err error)
-	// Get gets the value of key.
+	// GetCachedCalc gets the value of key.
 	// exists will be false If the key does not exist.
 	// An error is returned if the implementor want to signal any errors.
 	Get(ctx context.Context, key string) (value []byte, exists bool, err error)

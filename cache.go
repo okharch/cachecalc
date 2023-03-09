@@ -44,7 +44,7 @@ type CachedCalculation struct {
 	MaxTTL      time.Duration  // when value expires completely and needs to be recalculated
 }
 
-// CachedCalculations has the only method: Get. It is used for easy refactoring of slow/long calculating backend methods. See examples
+// CachedCalculations has the only method: GetCachedCalc. It is used for easy refactoring of slow/long calculating backend methods. See examples
 type CachedCalculations struct {
 	entries       map[string]*cacheEntry
 	requests      chan *request
@@ -98,24 +98,28 @@ func NewCachedCalculations(ctx context.Context, maxWorkers int, externalCache Ex
 	return &cc
 }
 
-// Get is used wherever you need to perform cached and coordinated calculation instead of regular and uncoordinated
+// GetCachedCalc is used wherever you need to perform cached and coordinated calculation instead of regular and uncoordinated
 //
 // ctx is a parent context for calculation
 // if parent context is cancelled then all child context are cancelled as well
 //
 // params of CachedCalculation - see description of how CachedCalculation defined
-func (cc *CachedCalculations) Get(ctx context.Context, params CachedCalculation) (result any, err error) {
+func GetCachedCalc[T any](cc *CachedCalculations, ctx context.Context, key string, minTTL, maxTTL time.Duration, limitWorker bool,
+	calculateValue func(ctx context.Context) (T, error)) (result T, err error) {
 	ready := make(chan error)
+	calcValue := func(ctx context.Context) (any, error) {
+		return calculateValue(ctx)
+	}
 	// put request to channel for handling
 	cc.requests <- &request{
-		calculateValue: params.Calculate,
+		calculateValue: calcValue,
 		ctx:            ctx,
-		key:            params.Key,
+		key:            key,
 		dest:           &result,
 		ready:          ready,
-		maxTTL:         params.MaxTTL,
-		minTTL:         params.MinTTL,
-		limitWorker:    params.LimitWorker,
+		maxTTL:         maxTTL,
+		minTTL:         minTTL,
+		limitWorker:    limitWorker,
 	}
 	// then wait for the result to be wait
 	err = <-ready
@@ -277,7 +281,7 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	//	if gotLock, err = cc.externalCache.SetNX(ctx, lockKey, ts, r.maxTTL); err != nil {
 	//		return
 	//	}
-	//	value, external, err := cc.externalCache.Get(entry.ctx, r.key)
+	//	value, external, err := cc.externalCache.GetCachedCalc(entry.ctx, r.key)
 	//	if external {
 	//		// we keep at external cache whole entry. entry is pointer to cache entry
 	//		err := deserialize(value, entry)

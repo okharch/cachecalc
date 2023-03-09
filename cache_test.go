@@ -26,29 +26,21 @@ func TestSimple(t *testing.T) {
 	ctx := context.TODO()
 	counter := 0
 	const p = time.Millisecond * 300
-	cc := CachedCalculation{
-		Key:         "key",
-		Calculate:   func(ctx context.Context) (any, error) { time.Sleep(p); counter++; return counter, nil },
-		LimitWorker: false,
-		MinTTL:      p * 2,
-		MaxTTL:      p * 4,
-	}
 	ccS := NewCachedCalculations(ctx, 3, nil)
 	require.NotNil(t, ccS)
 	var d1, d2, d3 int
 	var wg sync.WaitGroup
-	Get := func(result *int) {
+	getI := func(ctx context.Context) (int, error) { time.Sleep(p); counter++; return counter, nil }
+	GetI := func(result *int) {
 		defer wg.Done()
-		r, err := ccS.Get(ctx, cc)
+		r, err := GetCachedCalc(ccS, ctx, "key", p*2, p*3, true, getI)
 		require.NoError(t, err)
-		var ok bool
-		*result, ok = r.(int)
-		require.True(t, ok)
+		*result = r
 	}
 	wg.Add(3)
-	go Get(&d1)
-	go Get(&d2)
-	go Get(&d3)
+	go GetI(&d1)
+	go GetI(&d2)
+	go GetI(&d3)
 	wg.Wait()
 	require.Equal(t, 1, d1)
 	require.Equal(t, 1, d2)
