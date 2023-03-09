@@ -3,6 +3,8 @@ package cachecalc
 import (
 	"bytes"
 	"encoding/gob"
+	"errors"
+	"fmt"
 	"time"
 )
 
@@ -18,7 +20,11 @@ func serialize(value any) ([]byte, error) {
 
 func deserialize(d []byte, valPtr any) error {
 	dec := gob.NewDecoder(bytes.NewBuffer(d))
-	return dec.Decode(valPtr)
+	err := dec.Decode(valPtr)
+	if err != nil {
+		err = fmt.Errorf("deserialize value error: %w", err)
+	}
+	return err
 }
 
 type ceSerialize struct {
@@ -28,18 +34,18 @@ type ceSerialize struct {
 	Value   []byte
 }
 
-func serialize_entry(e *cacheEntry) (result []byte, err error) {
-	ce := &ceSerialize{Expire: e.Expire, Refresh: e.Refresh, Error: e.Err, Value: e.Value}
+func serializeEntry(e *cacheEntry) (result []byte, err error) {
+	ce := &ceSerialize{Expire: e.Expire, Refresh: e.Refresh, Error: e.Err.Error(), Value: e.Value}
 	return serialize(ce)
 }
 
-func deserialize_entry(buf []byte, dest any) (result *cacheEntry, err error) {
+func deserializeEntry(buf []byte, dest any) (result *cacheEntry, err error) {
 	var e ceSerialize
 	err = deserialize(buf, &e)
 	if err != nil {
 		return
 	}
-	result = &cacheEntry{Expire: e.Expire, Refresh: e.Refresh, Err: e.Error, Value: e.Value}
+	result = &cacheEntry{Expire: e.Expire, Refresh: e.Refresh, Err: errors.New(e.Error), Value: e.Value}
 	err = deserialize(e.Value, dest)
 	return
 }

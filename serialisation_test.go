@@ -53,12 +53,12 @@ func testSerializeType(t *testing.T, val any, dest any, compare func() bool) {
 	now := time.Now()
 	buf, err := serialize(val)
 	require.NoError(t, err)
-	ce := &cacheEntry{Refresh: now, Expire: now, Err: ErrMsg(someErr), Value: buf}
+	ce := &cacheEntry{Refresh: now, Expire: now, Err: someErr, Value: buf}
 	require.Equal(t, ErrMsg(someErr), ce.Err)
-	buf, err = serialize_entry(ce)
+	buf, err = serializeEntry(ce)
 	require.NoError(t, err)
 	require.NotNil(t, buf)
-	ce1, err := deserialize_entry(buf, dest)
+	ce1, err := deserializeEntry(buf, dest)
 	require.NoError(t, err)
 	require.NotNil(t, ce1)
 	require.True(t, compare())
