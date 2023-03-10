@@ -12,7 +12,7 @@ import (
 type CalculateValue func(context.Context) (any, error)
 
 // DefaultCCs default cached calculations cache used by GetCachedCalc
-// It does not uses external cache for coordinating between multiple distributed
+// It does not use external cache for coordinating between multiple distributed
 var DefaultCCs = NewCachedCalculations(4, nil)
 
 type request struct {
@@ -143,16 +143,20 @@ func (cc *CachedCalculations) obtainValue(ctx context.Context, r *request) (err 
 // simple case for single CachedCalculations instance.
 func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err error) {
 	entry, entryExists, entryNeedRefresh := cc.obtainEntry(ctx, r)
-	logger.Printf("lock was obtained for entry %s\n", r.key)
+	logger.Printf("thread %v, lock was obtained for entry %s\n", getThread(ctx), r.key)
 	if !entryExists {
-		return cc.calculateValue(r, entry, "not exists", true)
+		return cc.calculateValue(ctx, r, entry, "not exists", true)
 	}
+	if zeroEntry(entry) {
+		return cc.calculateValue(ctx, r, entry, "zero entry", true)
+	}
+	// entry already cached, put its value to client's response
 	cc.pushValue(entry, r)
 	if entryNeedRefresh { // item can be refreshed
-		return cc.calculateValue(r, entry, "refresh", false)
+		return cc.calculateValue(ctx, r, entry, "refresh", false)
 	}
 	entry.Unlock() // this release will happen only if calculateValue has not been called, otherwise Unlock is done there
-	logger.Printf("lock was released for entry %s\n", r.key)
+	logger.Printf("thread %v,lock was released for entry %s\n", getThread(ctx), r.key)
 	return nil
 }
 
@@ -206,7 +210,6 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	// try to get lock on external
 	panic("not implemented")
 	//for {
-	//	ts := intbytes(time.Now().UnixMilli())
 	//	if gotLock, err = cc.externalCache.SetNX(ctx, lockKey, ts, r.maxTTL); err != nil {
 	//		return
 	//	}
@@ -264,32 +267,41 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	//}
 }
 
-func (cc *CachedCalculations) calculateValue(r *request, entry *cacheEntry, reason string, pushValue bool) (err error) {
+func getThread(ctx context.Context) any {
+	v := ctx.Value("thread")
+	return v
+}
+
+func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, entry *cacheEntry, reason string, pushValue bool) (err error) {
 	wait := entry.wait // before starting calculation check whether someone else is not performing it already
+	thread := ctx.Value("thread")
 	if wait != nil {
 		entry.Unlock()
-		logger.Printf("lock was released for entry %s\n", r.key)
+		logger.Printf("thread %v,lock was released for entry %s\n", thread, r.key)
 		if pushValue {
-			logger.Printf("waiting while other thread calculating entry %s\n", r.key)
+			logger.Printf("thread %v,waiting while other thread calculating entry %s\n", thread, r.key)
 			<-wait // wait until it was closed
-			logger.Printf("waiting for other thread completed: %s\n", r.key)
+			logger.Printf("thread %v,waiting for other thread completed: %s\n", thread, r.key)
 			cc.pushValue(entry, r)
-			logger.Printf("entry %s value has been pushed to ready channel from cache\n", r.key)
+			logger.Printf("thread %v,entry %s value has been pushed to ready channel from cache\n", thread, r.key)
+		} else {
+			logger.Printf("thread %v, reason %s, key %s already being updated by someone else", thread, reason, r.key)
 		}
 		return entry.Err
 	}
 
 	entry.wait = make(chan struct{}) // mark that calculation is being performed for this entry
 	entry.Unlock()
-	logger.Printf("lock was released for entry %s\n", r.key)
+	logger.Printf("thread %v,lock was released for entry %s\n", thread, r.key)
 	if r.limitWorker {
 		// add new worker
 		cc.limitWorkers <- struct{}{}
 	}
 	started := time.Now()
 	var v any
+	logger.Printf("thread %v,key %s, reason %s calculating value...", thread, r.key, reason)
 	v, err = r.calculateValue(context.WithValue(entry.ctx, "reason", reason))
-	logger.Printf("value %s recalculated to %v", r.key, v)
+	logger.Printf("thread %v,value %s recalculated to %v", thread, r.key, v)
 	calcDuration := time.Since(started)
 	if err == nil {
 		entry.Value, err = serialize(v)
@@ -307,23 +319,23 @@ func (cc *CachedCalculations) calculateValue(r *request, entry *cacheEntry, reas
 		// pop worker
 		<-cc.limitWorkers
 	}
-	logger.Printf("waiting to lock entry %s for broadcasting value is ready\n", r.key)
+	logger.Printf("thread %v,waiting to lock entry %s for broadcasting value is ready\n", thread, r.key)
 	entry.Lock()
 	close(entry.wait) // broadcast to calculation who waits
-	logger.Printf("entry %s broadcast value %v is ready, setting cache entry\n", r.key, v)
+	logger.Printf("thread %v,entry %s broadcast value %v is ready, setting cache entry\n", thread, r.key, v)
 	entry.wait = nil // calculations complete
 	// update refresh and expire
 	entry.Refresh = now.Add(r.minTTL)
 	entry.Expire = now.Add(r.maxTTL)
 	entry.Unlock()
-	logger.Printf("entry %s %v was unlocked\n", r.key, v)
+	logger.Printf("thread %v,entry %s %v was unlocked\n", thread, r.key, v)
 	cc.Lock()
 	cc.entries[r.key] = entry
 	cc.Unlock()
-	logger.Printf("entry %s %v is set to cache entry\n", r.key, v)
+	logger.Printf("thread %v,entry %s %v is set to cache entry\n", thread, r.key, v)
 	if pushValue {
 		cc.pushValue(entry, r)
-		logger.Printf("entry %s value %v has been pushed to ready channel\n", r.key, v)
+		logger.Printf("thread %v,entry %s value %v has been pushed to ready channel\n", thread, r.key, v)
 	}
 	return
 }
@@ -339,13 +351,18 @@ func (cc *CachedCalculations) handleRequest(r *request) {
 	go obtain()
 }
 
+func zeroEntry(e *cacheEntry) bool {
+	var zeroTime time.Time
+	return e.Expire == zeroTime
+}
+
 func (cc *CachedCalculations) removeExpired() {
 	cc.Lock()
 	defer cc.Unlock()
 	now := time.Now()
 	for k, e := range cc.entries {
 		e.Lock()
-		if e.wait == nil && e.Expire.Before(now) {
+		if e.wait == nil && !zeroEntry(e) && e.Expire.Before(now) {
 			delete(cc.entries, k)
 		}
 		e.Unlock()

@@ -33,22 +33,24 @@ func TestLocalSimple(t *testing.T) {
 	ctx := context.TODO()
 	counter := 0
 	const p = time.Millisecond * 30
-	ccS := NewCachedCalculations(3, nil)
-	require.NotNil(t, ccS)
+	const refresh = p * 2
+	const expire = p * 3
 	var d1, d2, d3 int
 	var wg sync.WaitGroup
 	getI := func(ctx context.Context) (int, error) { time.Sleep(p); counter++; return counter, nil }
-	GetI := func(result *int) {
+	GetI := func(result *int, thread int) {
 		defer wg.Done()
-		r, err := GetCachedCalc(ccS, ctx, "key", p*2, p*3, true, getI)
+		ctx := context.WithValue(ctx, "thread", thread)
+		r, err := GetCachedCalc(ctx, "key", refresh, expire, true, getI)
 		require.NoError(t, err)
 		*result = r
 	}
 	wg.Add(3)
-	go GetI(&d1)
-	go GetI(&d2)
-	go GetI(&d3)
+	go GetI(&d1, 1)
+	go GetI(&d2, 2)
+	go GetI(&d3, 3)
 	wg.Wait()
+	time.Sleep(expire)
 	require.Equal(t, 1, d1)
 	require.Equal(t, 1, d2)
 	require.Equal(t, 1, d3)
@@ -60,22 +62,21 @@ func TestLocal(t *testing.T) {
 	const p = time.Millisecond * 30
 	const refresh = p * 2
 	const expire = p * 3
-	ccS := NewCachedCalculations(3, nil)
-	require.NotNil(t, ccS)
 	var d1, d2, d3 int
 	var wg sync.WaitGroup
 	getI := func(ctx context.Context) (int, error) { time.Sleep(p); counter++; return counter, nil }
-	GetI := func(result *int) {
+	GetI := func(result *int, thread int) {
 		defer wg.Done()
-		r, err := GetCachedCalc(ccS, ctx, "key", refresh, expire, true, getI)
+		ctx := context.WithValue(ctx, "thread", thread)
+		r, err := GetCachedCalc(ctx, "key", refresh, expire, true, getI)
 		require.NoError(t, err)
 		*result = r
 	}
 	// simple test cache
 	wg.Add(3)
-	GetI(&d1)
-	GetI(&d2)
-	GetI(&d3)
+	GetI(&d1, 1)
+	GetI(&d2, 2)
+	GetI(&d3, 3)
 	require.Equal(t, 1, d1)
 	require.Equal(t, 1, d2)
 	require.Equal(t, 1, d3)
@@ -83,7 +84,7 @@ func TestLocal(t *testing.T) {
 	// wait value need to be refreshed and d1 should be the same, but d2 different
 	time.Sleep(refresh + time.Millisecond)
 	wg.Add(1)
-	go GetI(&d1) // should trigger refresh
+	go GetI(&d1, 1) // should trigger refresh
 	wg.Wait()
 	require.Equal(t, 1, d1)
 	time.Sleep(p + time.Millisecond) // which in p should increase counter
