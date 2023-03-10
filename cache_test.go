@@ -2,6 +2,8 @@ package cachecalc
 
 import (
 	"context"
+	"log"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -30,6 +32,7 @@ func TestRemote(t *testing.T) {
 }
 
 func TestLocalSimple(t *testing.T) {
+	logger = log.New(os.Stderr, "", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
 	ctx := context.TODO()
 	counter := 0
 	const p = time.Millisecond * 30
@@ -57,6 +60,7 @@ func TestLocalSimple(t *testing.T) {
 }
 
 func TestLocal(t *testing.T) {
+	logger = log.New(os.Stderr, "", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
 	ctx := context.TODO()
 	counter := 0
 	const p = time.Millisecond * 30

@@ -2,8 +2,8 @@ package cachecalc
 
 import (
 	"context"
+	"io"
 	"log"
-	"os"
 	"sync"
 	"time"
 )
@@ -60,8 +60,7 @@ type CachedCalculations struct {
 var logger *log.Logger
 
 func init() {
-	//logger = log.New(io.Discard, "", log.LstdFlags)
-	logger = log.New(os.Stderr, "", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
+	logger = log.New(io.Discard, "", log.LstdFlags)
 }
 
 // NewCachedCalculations is used to create app's instance of CachedCalculations.
