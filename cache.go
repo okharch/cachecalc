@@ -17,7 +17,7 @@ type request struct {
 	key            string
 	ready          chan error // error message, empty if no error
 	dest           any        // but provide pointer to result!!!
-	limitWorker    bool       // if you know calculation puts heavy load on infrastructure, than set it to true!
+	limitWorker    bool       // if you know calculation puts heavy load on infrastructure, then set it to true!
 	maxTTL, minTTL time.Duration
 }
 
@@ -38,7 +38,7 @@ type cacheEntry struct {
 type CachedCalculation struct {
 	Key         string         // key to store this calculation into cache
 	Calculate   CalculateValue // function called to create/refresh the value for the Key
-	LimitWorker bool           // true if it is heavy load and need to be limited cocnurrent workers like this
+	LimitWorker bool           // true if it is heavy load and need to be limited concurrent workers like this
 	MinTTL      time.Duration  // until MinTTL value is returned from cache and is not being refreshed
 	MaxTTL      time.Duration  // when value expires completely and needs to be recalculated
 }
@@ -51,23 +51,6 @@ type CachedCalculations struct {
 	limitWorkers  chan struct{}
 	sync.Mutex
 	sync.WaitGroup
-}
-
-// this is a global object for CachedCalculations,
-// can be obtained using cachecalc.GetCachedCalculations() method
-var singletonCC *CachedCalculations
-
-// returns singleton CachedCalculations object
-func GetCachedCalculations() *CachedCalculations {
-	return singletonCC
-}
-
-// sets singleton CachedCalculations object.
-// In most cases you only need the single instance of cached calculations.
-// If that is the case, create instance using NewCachedCalculations and pass the instance to this function to set singleton.
-// You then have access to it anywhere in application using cachecalc.GetCachedCalculations()
-func SetCachedCalculations(cc *CachedCalculations) {
-	singletonCC = cc
 }
 
 var logger *log.Logger
@@ -102,6 +85,7 @@ func GetCachedCalc[T any](cc *CachedCalculations, ctx context.Context, key strin
 	calcValue := func(ctx context.Context) (any, error) {
 		return calculateValue(ctx)
 	}
+	cc.removeExpired()
 	//return calculateValue(ctx)
 	// put request to channel for handling
 	go cc.handleRequest(&request{
@@ -135,13 +119,6 @@ func (cc *CachedCalculations) Close() {
 	}
 }
 
-func ErrMsg(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
-}
-
 // for request r obtains value from cache/calculation and pushes status of the operation to r.wait
 // then checks whether value need to be refreshed in cache
 func (cc *CachedCalculations) obtainValue(ctx context.Context, r *request) (err error) {
@@ -154,25 +131,23 @@ func (cc *CachedCalculations) obtainValue(ctx context.Context, r *request) (err 
 
 // simple case for single CachedCalculations instance.
 func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err error) {
-	entry, entryExists, entryExpired, entryNeedRefresh := cc.obtainEntry(ctx, r)
+	entry, entryExists, entryNeedRefresh := cc.obtainEntry(ctx, r)
 	logger.Printf("lock was obtained for entry %s\n", r.key)
 	if !entryExists {
 		return cc.calculateValue(r, entry, "not exists", true)
-	}
-	if entryExpired { // item expired, recalculate it
-		return cc.calculateValue(r, entry, "expired", true)
 	}
 	cc.pushValue(entry, r)
 	if entryNeedRefresh { // item can be refreshed
 		return cc.calculateValue(r, entry, "refresh", false)
 	}
-	entry.Unlock() // this release will happend only if calculateValue has not been called, otherwise Unlock is done there
+	entry.Unlock() // this release will happen only if calculateValue has not been called, otherwise Unlock is done there
 	logger.Printf("lock was released for entry %s\n", r.key)
 	return nil
 }
 
-func (cc *CachedCalculations) obtainEntry(ctx context.Context, r *request) (entry *cacheEntry, exists bool, expired bool, needRefresh bool) {
+func (cc *CachedCalculations) obtainEntry(ctx context.Context, r *request) (entry *cacheEntry, exists bool, needRefresh bool) {
 	cc.Lock()
+	defer cc.Unlock()
 	entry, exists = cc.entries[r.key]
 	if !exists {
 		// create new entry for internal memory as entry does not exist
@@ -183,10 +158,8 @@ func (cc *CachedCalculations) obtainEntry(ctx context.Context, r *request) (entr
 	entry.Lock()
 	if exists {
 		now := time.Now()
-		expired = entry.Expire.Before(now)
 		needRefresh = entry.Refresh.Before(now)
 	}
-	cc.Unlock() // we need to unlock whole cache before doing any calculations in order to not hold everybody
 	return
 }
 
@@ -213,8 +186,8 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 		}
 	}()
 	// try to obtain the value from local cache
-	entry, entryExists, entryExpired, entryNeedRefresh := cc.obtainEntry(ctx, r)
-	if entryExists && !entryExpired && !entryNeedRefresh {
+	entry, entryExists, entryNeedRefresh := cc.obtainEntry(ctx, r)
+	if entryExists && !entryNeedRefresh {
 		entry.Unlock()
 		cc.pushValue(entry, r)
 		return entry.Err
@@ -355,12 +328,15 @@ func (cc *CachedCalculations) handleRequest(r *request) {
 	go obtain()
 }
 
-func (cc *CachedCalculations) runIdle(_ context.Context) {
+func (cc *CachedCalculations) removeExpired() {
 	cc.Lock()
 	defer cc.Unlock()
+	now := time.Now()
 	for k, e := range cc.entries {
-		if time.Now().After(e.Expire) {
+		e.Lock()
+		if e.wait == nil && e.Expire.Before(now) {
 			delete(cc.entries, k)
 		}
+		e.Unlock()
 	}
 }
