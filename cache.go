@@ -11,6 +11,10 @@ import (
 // CalculateValue this is type of function which returns interface{} type
 type CalculateValue func(context.Context) (any, error)
 
+// DefaultCCs default cached calculations cache used by GetCachedCalc
+// It does not uses external cache for coordinating between multiple distributed
+var DefaultCCs = NewCachedCalculations(4, nil)
+
 type request struct {
 	ctx            context.Context
 	calculateValue CalculateValue
@@ -73,13 +77,20 @@ func NewCachedCalculations(maxWorkers int, externalCache ExternalCache) *CachedC
 	return &cc
 }
 
-// GetCachedCalc is used wherever you need to perform cached and coordinated calculation instead of regular and uncoordinated
+// GetCachedCalc uses default cached calculations cache as GetCachedCalcX(DefaultCCs,...) for convenience
+// it is created with default for no external cache, but that can be redefined by app
+func GetCachedCalc[T any](ctx context.Context, key string, minTTL, maxTTL time.Duration, limitWorker bool,
+	calculateValue func(ctx context.Context) (T, error)) (result T, err error) {
+	return GetCachedCalcX(DefaultCCs, ctx, key, minTTL, maxTTL, limitWorker, calculateValue)
+}
+
+// GetCachedCalcX is used wherever you need to perform cached and coordinated calculation instead of regular and uncoordinated
 //
 // ctx is a parent context for calculation
 // if parent context is cancelled then all child context are cancelled as well
 //
 // params of CachedCalculation - see description of how CachedCalculation defined
-func GetCachedCalc[T any](cc *CachedCalculations, ctx context.Context, key string, minTTL, maxTTL time.Duration, limitWorker bool,
+func GetCachedCalcX[T any](cc *CachedCalculations, ctx context.Context, key string, minTTL, maxTTL time.Duration, limitWorker bool,
 	calculateValue func(ctx context.Context) (T, error)) (result T, err error) {
 	ready := make(chan error)
 	calcValue := func(ctx context.Context) (any, error) {
