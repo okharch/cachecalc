@@ -15,18 +15,18 @@ func init2Caches(t *testing.T, ctx context.Context) (sc1, sc2 *CachedCalculation
 		t.Skipf("skip test due external cache not available: %s", err)
 	}
 	require.NotNil(t, externalCache)
-	sc1 = NewCachedCalculations(ctx, 3, externalCache)
-	sc2 = NewCachedCalculations(ctx, 3, externalCache)
+	sc1 = NewCachedCalculations(3, externalCache)
+	sc2 = NewCachedCalculations(3, externalCache)
 	require.NotNil(t, sc1)
 	require.NotNil(t, sc2)
 	return
 }
 
-func TestSimple(t *testing.T) {
+func TestLocalSimple(t *testing.T) {
 	ctx := context.TODO()
 	counter := 0
-	const p = time.Millisecond * 300
-	ccS := NewCachedCalculations(ctx, 3, nil)
+	const p = time.Millisecond * 30
+	ccS := NewCachedCalculations(3, nil)
 	require.NotNil(t, ccS)
 	var d1, d2, d3 int
 	var wg sync.WaitGroup
