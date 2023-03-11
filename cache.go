@@ -26,12 +26,14 @@ type request struct {
 }
 
 type cacheEntry struct {
-	Expire  time.Time     // time of expiration of this entry
-	Refresh time.Time     // time when this value should be refreshed
-	Request time.Time     // when this Value was last time requested. If it is not requested recently it will not be refreshed
-	wait    chan struct{} // closed when entry is wait
-	Err     error
-	Value   []byte
+	Expire  time.Time // time of expiration of this entry
+	Refresh time.Time // time when this value should be refreshed
+	Request time.Time // when this Value was last time requested. If it is not requested recently it will not be refreshed
+	Err     error     // stores the last error status of calculations
+	Value   []byte    // stores the serialized value of last calculations
+	// wait is channel which, if not nil, signals about ongoing calculation on the item.
+	// It is closed by issuer to inform interested clients on end of calculations
+	wait chan struct{}
 	sync.RWMutex
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -186,86 +188,6 @@ func (cc *CachedCalculations) pushValue(entry *cacheEntry, r *request) {
 	}
 }
 
-func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (err error) {
-	lockKey := r.key + ".Lock"
-	gotLock := false
-	// release lock on exit if it was obtained
-	defer func() {
-		if gotLock {
-			if err := cc.externalCache.Del(ctx, lockKey); err != nil {
-				logger.Printf("failed to remove lock %s: %s", lockKey, err)
-			} else {
-				logger.Printf("lock %s removed", lockKey)
-			}
-		}
-	}()
-	// try to obtain the value from local cache
-	entry, entryExists, entryNeedRefresh := cc.obtainEntry(ctx, r)
-	if entryExists && !entryNeedRefresh {
-		entry.Unlock()
-		cc.pushValue(entry, r)
-		return entry.Err
-	}
-	// try to get lock on external
-	panic("not implemented")
-	//for {
-	//	if gotLock, err = cc.externalCache.SetNX(ctx, lockKey, ts, r.maxTTL); err != nil {
-	//		return
-	//	}
-	//	value, external, err := cc.externalCache.GetCachedCalc(entry.ctx, r.key)
-	//	if external {
-	//		// we keep at external cache whole entry. entry is pointer to cache entry
-	//		err := deserialize(value, entry)
-	//		if err == nil {
-	//			logger.Printf("got value %v from external cc", ts(entry.Refresh))
-	//			if entry.Refresh.After(time.Now()) {
-	//				logger.Printf("no need to refresh value %v from external cc", ts(entry.Refresh))
-	//				return nil
-	//			}
-	//		}
-	//	}
-	//	if !gotLock {
-	//		time.Sleep(time.Millisecond)
-	//		continue
-	//	}
-	//	if entry.ctx.Err() != nil {
-	//		return entry.ctx.Err()
-	//	}
-	//	if err != nil {
-	//		err = fmt.Errorf("external cc: %s", err)
-	//		return err
-	//	}
-	//}
-	//	// try getting lock to refresh value
-	//	if !gotLock {
-	//		lockCounter++
-	//		logger.Printf("obtaining lock %d to refresh value", lockCounter)
-	//		gotLock, err = cc.externalCache.SetNX(ctx, lockKey, uin32bytes(lockCounter), r.maxTTL)
-	//		if err != nil {
-	//			return fmt.Errorf("set lock error: %w", err)
-	//		}
-	//	}
-	//	logger.Printf("gotLock %d: %v", lockCounter, gotLock)
-	//	if gotLock {
-	//		err2, done := cc.calculateValue(r, err, e, reason, pushValue)
-	//		// set newly calculated item to external cc
-	//		buf, err := serializeEntry(e)
-	//		if err != nil {
-	//			return fmt.Errorf("error marshalling cc entry: %s", err)
-	//		}
-	//		err = cc.externalCache.Set(e.ctx, r.key, buf, r.maxTTL)
-	//		if err != nil {
-	//			return fmt.Errorf("failed to set external cc %s: %s", r.key, err)
-	//		}
-	//		return nil
-	//	} else {
-	//		// wait until the one with lock calculates new value.
-	//		logger.Print("waiting the result of calculation from redis")
-	//		time.Sleep(time.Millisecond * 20)
-	//	}
-	//}
-}
-
 func getThread(ctx context.Context) any {
 	v := ctx.Value("thread")
 	return v
@@ -288,7 +210,6 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 		}
 		return entry.Err
 	}
-
 	entry.wait = make(chan struct{}) // mark that calculation is being performed for this entry
 	entry.Unlock()
 	logger.Printf("thread %v,lock was released for entry %s\n", thread, r.key)
