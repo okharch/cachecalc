@@ -8,9 +8,6 @@ import (
 
 func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (err error) {
 	lockKey := r.key + ".Lock"
-	var externalExists bool // we obtained value from external
-	var externalLock bool   // we obtained lock from external
-	pushValue := true       // need to push obtained value this call
 	thread := getThread(ctx)
 	// try to obtain the value from local cache
 	entry := cc.obtainEntry(ctx, r)
@@ -32,6 +29,7 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	}
 	// release lock on exit if it was obtained
 	var localLock bool
+	var externalLock bool // we obtained lock from external
 	defer func() {
 		if externalLock {
 			if err := cc.externalCache.Del(ctx, lockKey); err != nil {
@@ -49,10 +47,10 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	entry.wait = make(chan struct{})
 	entry.Unlock()
 	// this loop tries to obtain either the freshest value from external or lock to calculate its own version
+	pushValue := true // need to push obtained value only once
 	for {
 		// check entrySerialized for key
-		var entrySerialized []byte
-		entrySerialized, externalExists, err = cc.externalCache.Get(ctx, r.key)
+		entrySerialized, externalExists, err := cc.externalCache.Get(ctx, r.key)
 		if err != nil {
 			return fmt.Errorf("thread %v, key %s:failed to obtain entrySerialized from external cache: %w", thread, r.key, err)
 		}
