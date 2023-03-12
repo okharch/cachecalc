@@ -57,6 +57,7 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 		if externalExists {
 			localLock = true
 			entry.Lock()
+			logger.Printf("serialized entry length %d", len(entrySerialized))
 			err = deserializeEntry(entrySerialized, entry)
 			if err != nil {
 				return fmt.Errorf("thread %v, key %s:failed to obtain entrySerialized from external cache: %w", thread, r.key, err)
