@@ -11,9 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const tick = time.Millisecond * 30
+const tick = time.Millisecond * 300
 const refresh = tick * 2
 const expire = tick * 3
+const key = "key"
 
 func initCalcTest(t *testing.T, wg *sync.WaitGroup, cc *CachedCalculations) func(result *int, thread int) {
 	logger = log.New(os.Stderr, "", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)

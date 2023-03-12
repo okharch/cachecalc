@@ -47,3 +47,29 @@ func TestRemote(t *testing.T) {
 	GetI1(&d3, 3)
 	wg.Wait()
 }
+
+func TestExternalCache(t *testing.T) {
+	ctx := context.TODO()
+	cc1, cc2 := init2Caches(t, ctx)
+	var entry cacheEntry
+	var err error
+	entry.Value, err = serialize(1)
+	require.NoError(t, err)
+	require.NotNil(t, entry.Value)
+	se, err := serializeEntry(&entry)
+	require.NoError(t, err)
+	require.NotNil(t, se)
+	require.NotZero(t, len(se))
+	err = cc1.externalCache.Set(ctx, key, se, expire)
+	require.NoError(t, err)
+	val, exists, err := cc2.externalCache.Get(ctx, key)
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.NotZero(t, len(val))
+	require.Equal(t, se, val)
+	time.Sleep(expire)
+	val2, exists, err := cc2.externalCache.Get(ctx, key)
+	require.NoError(t, err)
+	require.False(t, exists) // key expired
+	require.Zero(t, len(val2))
+}

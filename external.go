@@ -95,6 +95,7 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	close(entry.wait)                               // broadcast those who waited before calculations
 	// serialize and set external cache to the latest value
 	se, err := serializeEntry(entry)
+	logger.Printf("SET serialized entry length: %d", len(se))
 	if err != nil {
 		return err
 	}
