@@ -35,7 +35,11 @@ type ceSerialize struct {
 }
 
 func serializeEntry(e *cacheEntry) (result []byte, err error) {
-	ce := &ceSerialize{Expire: e.Expire, Refresh: e.Refresh, Error: e.Err.Error(), Value: e.Value}
+	var errMsg string
+	if e.Err != nil {
+		errMsg = e.Err.Error()
+	}
+	ce := &ceSerialize{Expire: e.Expire, Refresh: e.Refresh, Error: errMsg, Value: e.Value}
 	return serialize(ce)
 }
 
@@ -47,7 +51,9 @@ func deserializeEntry(buf []byte, entry *cacheEntry) (err error) {
 	}
 	entry.Expire = e.Expire
 	entry.Refresh = e.Refresh
-	entry.Err = errors.New(e.Error)
+	if e.Error != "" {
+		entry.Err = errors.New(e.Error)
+	}
 	entry.Value = e.Value
 	return nil
 }

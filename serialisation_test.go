@@ -75,5 +75,19 @@ func TestCacheEntrySerialize(t *testing.T) {
 	cbytes := []byte{1, 2, 3, 4}
 	var gbytes []byte
 	testSerializeType(t, cbytes, &gbytes, func() bool { return bytes.Equal(cbytes, gbytes) })
+}
 
+func TestSerializeEmptyEntry(t *testing.T) {
+	var ce cacheEntry
+	buf, err := serializeEntry(&ce)
+	require.NoError(t, err)
+	require.NotNil(t, buf)
+	var ce1 cacheEntry
+	err = deserializeEntry(buf, &ce1)
+	require.NoError(t, err)
+	require.True(t, ce.Expire.Equal(ce1.Expire))
+	require.True(t, ce.Refresh.Equal(ce1.Refresh))
+	require.Equal(t, ce.Err, ce1.Err)
+	require.NoError(t, ce1.Err)
+	require.Nil(t, ce1.Value)
 }
