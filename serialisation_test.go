@@ -58,13 +58,15 @@ func testSerializeType(t *testing.T, val any, dest any, compare func() bool) {
 	buf, err = serializeEntry(ce)
 	require.NoError(t, err)
 	require.NotNil(t, buf)
-	ce1, err := deserializeEntry(buf, dest)
+	var ce1 cacheEntry
+	err = deserializeEntry(buf, &ce1)
 	require.NoError(t, err)
-	require.NotNil(t, ce1)
-	require.True(t, compare())
 	require.True(t, ce.Expire.Equal(ce1.Expire))
 	require.True(t, ce.Refresh.Equal(ce1.Refresh))
 	require.Equal(t, ce.Err, ce1.Err)
+	err = deserialize(ce1.Value, dest)
+	require.NoError(t, err)
+	require.True(t, compare())
 }
 
 func TestCacheEntrySerialize(t *testing.T) {

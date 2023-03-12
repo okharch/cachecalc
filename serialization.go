@@ -39,13 +39,15 @@ func serializeEntry(e *cacheEntry) (result []byte, err error) {
 	return serialize(ce)
 }
 
-func deserializeEntry(buf []byte, dest any) (result *cacheEntry, err error) {
+func deserializeEntry(buf []byte, entry *cacheEntry) (err error) {
 	var e ceSerialize
 	err = deserialize(buf, &e)
 	if err != nil {
 		return
 	}
-	result = &cacheEntry{Expire: e.Expire, Refresh: e.Refresh, Err: errors.New(e.Error), Value: e.Value}
-	err = deserialize(e.Value, dest)
-	return
+	entry.Expire = e.Expire
+	entry.Refresh = e.Refresh
+	entry.Err = errors.New(e.Error)
+	entry.Value = e.Value
+	return nil
 }
