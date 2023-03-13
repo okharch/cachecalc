@@ -3,32 +3,42 @@ package cachecalc
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 )
 
 func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (err error) {
 	lockKey := r.key + ".Lock"
 	thread := getThread(ctx)
+	logger.Printf("thread %v obtain %s", thread, r.key)
 	// try to obtain the value from local cache
 	entry := cc.obtainEntry(r)
 	// there should be the only thread that communicates with external/calculates value from the single cc instance
 	// activeThread flag marks current thread as the one
 	pushValue := true
+	reason := "no value found"
 	if entryNonEmpty(entry) {
-		cc.pushValue(entry, r)
-		pushValue = false
+		cc.pushValue(ctx, entry, r)
 		err = entry.Err
+		if entry.Refresh.After(time.Now()) {
+			logger.Printf("thread %v:%s leaving no need to refresh for %v", thread, r.key, entry.Refresh.Sub(time.Now()))
+			entry.Unlock()
+			return
+		}
+		reason = "refresh"
+		pushValue = false
 	}
 	activeThread := entry.wait == nil
 	if !activeThread {
 		entry.Unlock()
 		if !pushValue {
+			logger.Printf("thread %v, key %s - leaving with cached entry %v", thread, r.key, getEntryValue(entry, r))
 			return
 		}
 		<-entry.wait
 		entry.RLock()
 		defer entry.RUnlock()
-		cc.pushValue(entry, r)
+		cc.pushValue(ctx, entry, r)
 		return entry.Err
 	}
 	// release external lock on exit if it was obtained
@@ -55,12 +65,13 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	// loop until either got lock or entry value from external cache
 	for !externalExists {
 		// check entrySerialized for key
+		logger.Printf("thread %v:%s getting external value", thread, r.key)
 		entrySerialized, externalExists, err = cc.externalCache.Get(ctx, r.key)
 		if err != nil {
 			return fmt.Errorf("thread %v, key %s:failed to obtain entrySerialized from external cache: %w", thread, r.key, err)
 		}
 		if externalExists {
-			logger.Printf("thread %v key %s : got external entry length %d", thread, r.key, len(entrySerialized))
+			//logger.Printf("thread %v key %s : got external entry length %d", thread, r.key, len(entrySerialized))
 			entry.Lock()
 			err = deserializeEntry(entrySerialized, entry)
 			if err != nil {
@@ -74,7 +85,7 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 			}
 			// broadcast obtained value
 			if pushValue {
-				cc.pushValue(entry, r)
+				cc.pushValue(ctx, entry, r)
 				pushValue = false // no more need to push value, do it only once
 			}
 			if entry.Refresh.After(time.Now()) {
@@ -105,13 +116,12 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	}
 	// as we got external lock, we can calculate value locally, set it to external cache
 	entry.Lock()
-	logger.Printf("thread %v recalculating value for %s", thread, r.key)
+	logger.Printf("thread %v:%s recalculating value: %s", thread, r.key, reason)
 	_ = cc.calculateValue(ctx, r, entry, pushValue) // ignore returned value, it is stored to entry
 	// serialize and set external cache to the latest value
 	entry.RLock()
 	defer entry.RUnlock()
 	se, err := serializeEntry(entry)
-	logger.Printf("SET serialized entry length: %d", len(se))
 	if err != nil {
 		return err
 	}
@@ -119,5 +129,11 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	if err != nil {
 		return err
 	}
+	logger.Printf("thread %v:%s SET external cache to %v", thread, r.key, getEntryValue(entry, r))
 	return entry.Err
+}
+
+func getEntryValue(entry *cacheEntry, r *request) any {
+	deserialize(entry.Value, r.dest)
+	return reflect.ValueOf(r.dest).Elem()
 }
