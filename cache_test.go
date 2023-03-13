@@ -43,18 +43,21 @@ func initCalcTest(t *testing.T, wg *sync.WaitGroup, cc *CachedCalculations) func
 }
 
 func TestLocalSimple(t *testing.T) {
-	var d1, d2, d3 int
+	const nThreads = 5
 	var wg sync.WaitGroup
 	GetI := initCalcTest(t, &wg, DefaultCCs)
-	wg.Add(3)
-	go GetI(&d1, 1)
-	go GetI(&d2, 2)
-	go GetI(&d3, 3)
+	wg.Add(nThreads)
+	dest := make([]int, nThreads)
+	for i := 0; i < nThreads; i++ {
+		go func(i int) {
+			GetI(&dest[i], i+1)
+		}(i)
+	}
 	wg.Wait()
 	DefaultCCs.Wait()
-	require.Equal(t, 1, d1)
-	require.Equal(t, 1, d2)
-	require.Equal(t, 1, d3)
+	for i := 0; i < nThreads; i++ {
+		require.Equal(t, 1, dest[i])
+	}
 }
 
 func TestLocal(t *testing.T) {

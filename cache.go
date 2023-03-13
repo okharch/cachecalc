@@ -162,9 +162,9 @@ func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err 
 		if entry.Expire.IsZero() {
 			// must not continue lock on entry until entry is being calculated!
 			entry.Unlock()
-			logger.Printf("thread %v,waiting while other thread calculating entry %s\n", thread, r.key)
+			logger.Printf("thread %v:%s,waiting while other thread calculating\n", thread, r.key)
 			<-wait // wait until it was closed
-			logger.Printf("thread %v,waiting for other thread completed: %s\n", thread, r.key)
+			logger.Printf("thread %v:%s,waiting for other thread completed: %v\n", thread, r.key, getEntryValue(entry, r))
 			// read Lock is enough to return value
 			entry.RLock()
 			defer entry.RUnlock()
@@ -238,7 +238,7 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	var v any
 	logger.Printf("thread %v:%s, reason %s calculating value...", thread, r.key, reason)
 	v, err = r.calculateValue(context.WithValue(ctx, "reason", reason))
-	logger.Printf("thread %v,value %s recalculated to %v", thread, r.key, v)
+	logger.Printf("thread %v,value %s (re)calculated to %v", thread, r.key, v)
 	calcDuration := time.Since(started)
 	now := time.Now()
 	minTTL := calcDuration * 2
