@@ -53,9 +53,17 @@ func TestExternalCache(t *testing.T) {
 	cc1, cc2 := init2Caches(t, ctx)
 	var entry cacheEntry
 	var err error
-	entry.Value, err = serialize(1)
+	v, err := serialize(1)
 	require.NoError(t, err)
-	require.NotNil(t, entry.Value)
+	require.NotNil(t, v)
+	entry.Value = v
+	lockKey := key + ".lock"
+	created, err := cc1.externalCache.SetNX(ctx, lockKey, v, expire)
+	require.NoError(t, err)
+	require.True(t, created)
+	created, err = cc2.externalCache.SetNX(ctx, lockKey, v, expire)
+	require.NoError(t, err)
+	require.False(t, created)
 	se, err := serializeEntry(&entry)
 	require.NoError(t, err)
 	require.NotNil(t, se)
@@ -72,4 +80,5 @@ func TestExternalCache(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, exists) // key expired
 	require.Zero(t, len(val2))
+
 }
