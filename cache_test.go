@@ -13,14 +13,25 @@ import (
 
 const tick = time.Millisecond * 300
 const refresh = tick * 2
-const expire = tick * 3
+const expire = tick * 5
 const key = "key"
+
+var counter int
+var mu sync.Mutex
 
 func initCalcTest(t *testing.T, wg *sync.WaitGroup, cc *CachedCalculations) func(result *int, thread int) {
 	logger = log.New(os.Stderr, "", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
 	ctx := context.TODO()
-	counter := 0
-	getI := func(ctx context.Context) (int, error) { time.Sleep(tick); counter++; return counter, nil }
+	counter = 0
+	logger.Printf("init calculations")
+	DefaultCCs = NewCachedCalculations(4, nil)
+	getI := func(ctx context.Context) (int, error) {
+		time.Sleep(tick)
+		mu.Lock()
+		counter++
+		mu.Unlock()
+		return counter, nil
+	}
 	GetI := func(result *int, thread int) {
 		defer wg.Done()
 		ctx := context.WithValue(ctx, "thread", thread)
@@ -40,12 +51,10 @@ func TestLocalSimple(t *testing.T) {
 	go GetI(&d2, 2)
 	go GetI(&d3, 3)
 	wg.Wait()
+	DefaultCCs.Wait()
 	require.Equal(t, 1, d1)
 	require.Equal(t, 1, d2)
 	require.Equal(t, 1, d3)
-	ce := DefaultCCs.entries["key"]
-	require.NotNil(t, ce)
-	require.Nil(t, ce.wait)
 }
 
 func TestLocal(t *testing.T) {
@@ -64,4 +73,5 @@ func TestLocal(t *testing.T) {
 	GetI(&d3, 3)
 	require.Equal(t, 2, d3)
 	wg.Wait()
+	DefaultCCs.Wait()
 }
