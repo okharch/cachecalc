@@ -43,6 +43,9 @@ func TestLocalSimple(t *testing.T) {
 	require.Equal(t, 1, d1)
 	require.Equal(t, 1, d2)
 	require.Equal(t, 1, d3)
+	ce := DefaultCCs.entries["key"]
+	require.NotNil(t, ce)
+	require.Nil(t, ce.wait)
 }
 
 func TestLocal(t *testing.T) {
