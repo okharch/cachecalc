@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -34,6 +35,7 @@ type cacheEntry struct {
 	// wait is channel which, if not nil, signals about ongoing calculation on the item.
 	// It is closed by issuer to inform interested clients on end of calculations
 	wait chan struct{}
+	sync.WaitGroup
 	sync.RWMutex
 }
 
@@ -98,18 +100,29 @@ func GetCachedCalcX[T any](cc *CachedCalculations, ctx context.Context, key stri
 	cc.removeExpired()
 	//return calculateValue(ctx)
 	// put request to channel for handling
-	go cc.handleRequest(&request{
-		calculateValue: calcValue,
-		ctx:            ctx,
-		key:            key,
-		dest:           &result,
-		ready:          ready,
-		maxTTL:         maxTTL,
-		minTTL:         minTTL,
-		limitWorker:    limitWorker,
-	})
+	cc.Lock()
+	cc.Add(2)
+	cc.Unlock()
+	go func() {
+		cc.handleRequest(&request{
+			calculateValue: calcValue,
+			ctx:            ctx,
+			key:            key,
+			dest:           &result,
+			ready:          ready,
+			maxTTL:         maxTTL,
+			minTTL:         minTTL,
+			limitWorker:    limitWorker,
+		})
+		cc.Lock()
+		cc.Done()
+		cc.Unlock()
+	}()
 	// then wait for the result to be wait
 	err = <-ready
+	cc.Lock()
+	cc.Done()
+	cc.Unlock()
 	return
 }
 
@@ -159,7 +172,7 @@ func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err 
 			defer entry.Unlock()
 			logger.Printf("thread %v, key %s already being updated by someone else", thread, r.key)
 		}
-		cc.pushValue(entry, r)
+		cc.pushValue(ctx, entry, r)
 		return entry.Err
 	}
 	return cc.calculateValue(ctx, r, entry, true)
@@ -178,12 +191,16 @@ func (cc *CachedCalculations) obtainEntry(r *request) *cacheEntry {
 	return entry
 }
 
-func (cc *CachedCalculations) pushValue(entry *cacheEntry, r *request) {
+func (cc *CachedCalculations) pushValue(ctx context.Context, entry *cacheEntry, r *request) {
+	thread := getThread(ctx)
 	if entry.Err != nil {
 		r.ready <- entry.Err
+		logger.Printf("thread %v, pushing error %s = %v", thread, r.key, entry.Err)
 	} else {
 		// store value to the destination variable
 		r.ready <- deserialize(entry.Value, r.dest)
+		v := reflect.ValueOf(r.dest).Elem()
+		logger.Printf("thread %v, pushing value of %s : %v", thread, r.key, v)
 	}
 }
 
@@ -198,7 +215,7 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	hadValue := entry.Expire.After(time.Now())
 	if hadValue {
 		if pushValue {
-			cc.pushValue(entry, r)
+			cc.pushValue(ctx, entry, r)
 		}
 		if entry.Refresh.After(time.Now()) {
 			defer entry.Unlock()
@@ -219,7 +236,7 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	}
 	started := time.Now()
 	var v any
-	logger.Printf("thread %v,key %s, reason %s calculating value...", thread, r.key, reason)
+	logger.Printf("thread %v:%s, reason %s calculating value...", thread, r.key, reason)
 	v, err = r.calculateValue(context.WithValue(ctx, "reason", reason))
 	logger.Printf("thread %v,value %s recalculated to %v", thread, r.key, v)
 	calcDuration := time.Since(started)
@@ -250,12 +267,8 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	entry.Expire = now.Add(r.maxTTL)
 	entry.Unlock()
 	logger.Printf("thread %v,entry %s %v was unlocked\n", thread, r.key, v)
-	cc.Lock()
-	cc.entries[r.key] = entry
-	cc.Unlock()
-	logger.Printf("thread %v,entry %s %v is set to cache entry\n", thread, r.key, v)
 	if !hadValue {
-		cc.pushValue(entry, r)
+		cc.pushValue(ctx, entry, r)
 		logger.Printf("thread %v,entry %s value %v has been pushed to ready channel\n", thread, r.key, v)
 	}
 	return
