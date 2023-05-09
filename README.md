@@ -36,11 +36,15 @@ When refresh finished, it stores the response to the cache, and will return the 
 - When the data has expired totally (MaxTTL), it's forcefully removed and will be recalculated on demand.
 3. CachedCalculation provides a simple method `GetCachedCalc` of refactoring existing backend methods to use its infrastructure. 
 The idea is to wrap all the existing methods that handle some request to a function of type 
-`CalculateValue func(context.Context) (any, error)`, 
+```
+CalculateValue func(context.Context) (any, error)
+``` 
 where `any` in the type of the result, in most cases will be the string with JSON. 
 To do this, wrap your implementation into a closure called e.g. `slowGet`, 
 which sees all the parameters of your method and use it like this: 
-`result, err := cachecalc.GetCachedCalc(ctx, key, maxTTL, minTTL, true, slowGet)`. 
+```
+result, err := cachecalc.GetCachedCalc(ctx, key, maxTTL, minTTL, true, slowGet)
+```
 It's a straightforward refactoring process which will drastically improves the performance of your backend!
 4. CachedCalculation takes lock before calculation using external cache if provided.
 Those who were unable to take lock patiently wait when the result appears in the external cache.
