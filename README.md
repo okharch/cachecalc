@@ -46,6 +46,7 @@ which sees all the parameters of your method and use it like this:
 result, err := cachecalc.GetCachedCalc(ctx, key, maxTTL, minTTL, true, slowGet)
 ```
 It's a straightforward refactoring process which will drastically improves the performance of your backend!
+
 4. CachedCalculation takes lock before calculation using external cache if provided.
 Those who were unable to take lock patiently wait when the result appears in the external cache.
 This allows to avoid concurrency issues mentioned in point #1. 
