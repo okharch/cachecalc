@@ -56,3 +56,7 @@ Although it works with an external cache asynchronously, it still takes time for
 My rule of thumb in this case: if you have a simple REST API handler without heavy load, give it more RAM and CPU, 
 and single Golang server will handle your request much faster than in Kubernetes or other distributed systems. 
 Don't use a sledgehammer to crack a nut!
+
+## TODO
+Make TTL returned by calculation. It might know better when returned value expires. For example ttl for token returned by calculation.
+
