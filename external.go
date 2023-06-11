@@ -20,8 +20,8 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	if entryNonEmpty(entry) {
 		cc.pushValue(ctx, entry, r)
 		err = entry.Err
-		if entry.Refresh.After(time.Now()) {
-			logger.Printf("thread %v:%s leaving no need to refresh for %v", thread, r.key, entry.Refresh.Sub(time.Now()))
+		if entry.Refresh.Before(time.Now()) {
+			logger.Printf("thread %v:%s leaving no need to refresh for %v", thread, r.key, time.Now().Sub(entry.Refresh))
 			entry.Unlock()
 			return
 		}
@@ -46,9 +46,9 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	defer func() {
 		if externalLock {
 			if err := cc.externalCache.Del(ctx, lockKey); err != nil {
-				logger.Printf("failed to remove lock %s: %s", lockKey, err)
+				logger.Printf("thread %v, key %s failed to remove lock %s: %s", thread, r.key, lockKey, err)
 			} else {
-				logger.Printf("lock %s removed", lockKey)
+				logger.Printf("thread %v, key %s lock %s removed", thread, r.key, lockKey)
 			}
 		}
 	}()
@@ -97,7 +97,7 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 			entry.wait = make(chan struct{})
 			entry.Unlock()
 		}
-		externalLock, err = cc.externalCache.SetNX(ctx, lockKey, []byte{1}, r.maxTTL)
+		externalLock, err = cc.externalCache.SetNX(ctx, lockKey, []byte{1}, r.MaxTTL)
 		if err != nil {
 			return fmt.Errorf("thread %v, key %s:failed to set external lock : %w", thread, r.key, err)
 		}
@@ -125,7 +125,7 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	if err != nil {
 		return err
 	}
-	err = cc.externalCache.Set(ctx, r.key, se, r.maxTTL)
+	err = cc.externalCache.Set(ctx, r.key, se, r.MaxTTL)
 	if err != nil {
 		return err
 	}
@@ -134,6 +134,8 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 }
 
 func getEntryValue(entry *cacheEntry, r *request) any {
+	entry.RLock()
+	defer entry.RUnlock()
 	deserialize(entry.Value, r.dest)
 	return reflect.ValueOf(r.dest).Elem()
 }

@@ -9,8 +9,15 @@ import (
 	"time"
 )
 
+type CachedCalcOpts struct {
+	MaxTTL, MinTTL time.Duration
+}
+
 // CalculateValue this is type of function which returns interface{} type
-type CalculateValue func(context.Context) (any, error)
+type (
+	CalculateValue       func(context.Context) (any, error)
+	CalculateValueAndOpt func(context.Context) (any, CachedCalcOpts, error)
+)
 
 // DefaultCCs default cached calculations cache used by GetCachedCalc
 // It does not use external cache for coordinating between multiple distributed
@@ -18,12 +25,12 @@ var DefaultCCs = NewCachedCalculations(4, nil)
 
 type request struct {
 	ctx            context.Context
-	calculateValue CalculateValue
+	calculateValue CalculateValueAndOpt
 	key            string
 	ready          chan error // error message, empty if no error
-	dest           any        // but provide pointer to result!!!
-	limitWorker    bool       // if you know calculation puts heavy load on infrastructure, then set it to true!
-	maxTTL, minTTL time.Duration
+	dest           any        // but provide pointer to the result!!!
+	limitWorkers   bool
+	CachedCalcOpts
 }
 
 type cacheEntry struct {
@@ -80,22 +87,17 @@ func NewCachedCalculations(maxWorkers int, externalCache ExternalCache) *CachedC
 
 // GetCachedCalc uses default cached calculations cache as GetCachedCalcX(DefaultCCs,...) for convenience
 // it is created with default for no external cache, but that can be redefined by app
-func GetCachedCalc[T any](ctx context.Context, key string, minTTL, maxTTL time.Duration, limitWorker bool,
-	calculateValue func(ctx context.Context) (T, error)) (result T, err error) {
-	return GetCachedCalcX(DefaultCCs, ctx, key, minTTL, maxTTL, limitWorker, calculateValue)
+func GetCachedCalcOpt[T any](ctx context.Context, key string,
+	calculateValueAndOpt func(ctx context.Context) (T, CachedCalcOpts, error), limitWorkers bool) (T, error) {
+	return GetCachedCalcOptX(DefaultCCs, ctx, key, calculateValueAndOpt, limitWorkers)
 }
 
-// GetCachedCalcX is used wherever you need to perform cached and coordinated calculation instead of regular and uncoordinated
-//
-// ctx is a parent context for calculation
-// if parent context is cancelled then all child context are cancelled as well
-//
-// params of CachedCalculation - see description of how CachedCalculation defined
-func GetCachedCalcX[T any](cc *CachedCalculations, ctx context.Context, key string, minTTL, maxTTL time.Duration, limitWorker bool,
-	calculateValue func(ctx context.Context) (T, error)) (result T, err error) {
+func GetCachedCalcOptX[T any](cc *CachedCalculations, ctx context.Context, key string,
+	calculateValueAndOpt func(ctx context.Context) (T, CachedCalcOpts, error), limitWorkers bool) (result T, err error) {
 	ready := make(chan error)
-	calcValue := func(ctx context.Context) (any, error) {
-		return calculateValue(ctx)
+	// cast calculateValueAndOpt to func(ctx context.Context) (any, CachedCalcOpts, error)
+	calcValue := func(ctx context.Context) (any, CachedCalcOpts, error) {
+		return calculateValueAndOpt(ctx)
 	}
 	cc.removeExpired()
 	//return calculateValue(ctx)
@@ -110,9 +112,7 @@ func GetCachedCalcX[T any](cc *CachedCalculations, ctx context.Context, key stri
 			key:            key,
 			dest:           &result,
 			ready:          ready,
-			maxTTL:         maxTTL,
-			minTTL:         minTTL,
-			limitWorker:    limitWorker,
+			limitWorkers:   limitWorkers,
 		})
 		cc.Lock()
 		cc.Done()
@@ -124,6 +124,30 @@ func GetCachedCalcX[T any](cc *CachedCalculations, ctx context.Context, key stri
 	cc.Done()
 	cc.Unlock()
 	return
+}
+
+// GetCachedCalc uses default cached calculations cache as GetCachedCalcX(DefaultCCs,...) for convenience
+// it is created with default for no external cache, but that can be redefined by app
+func GetCachedCalc[T any](ctx context.Context, key string, minTTL, maxTTL time.Duration, limitWorker bool,
+	calculateValue func(ctx context.Context) (T, error)) (result T, err error) {
+	return GetCachedCalcX(DefaultCCs, ctx, key, minTTL, maxTTL, limitWorker, calculateValue)
+}
+
+// GetCachedCalcX is used wherever you need to perform cached and coordinated calculation instead of regular and uncoordinated
+//
+// ctx is a parent context for calculation
+// if parent context is cancelled then all child context are cancelled as well
+//
+// params of CachedCalculation - see description of how CachedCalculation defined
+func GetCachedCalcX[T any](cc *CachedCalculations, ctx context.Context, key string, minTTL, maxTTL time.Duration, limitWorker bool,
+	calculateValue func(ctx context.Context) (T, error)) (T, error) {
+	// cast calculateValueAndOpt to func(ctx context.Context) (any, CachedCalcOpts, error)
+	calcValue := func(ctx context.Context) (T, CachedCalcOpts, error) {
+		result, err := calculateValue(ctx)
+		opt := CachedCalcOpts{MaxTTL: maxTTL, MinTTL: minTTL}
+		return result, opt, err
+	}
+	return GetCachedCalcOptX(cc, ctx, key, calcValue, limitWorker)
 }
 
 // Close is automatically called on expired context. It is safe to call it multiple times
@@ -158,8 +182,8 @@ func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err 
 	wait := entry.wait // before starting calculation check whether someone else is not performing it already
 	if wait != nil {
 		// non-active thread can just return whatever value is there and be it
-		// unless entry is still empty
-		if entry.Expire.IsZero() {
+		// unless entry expired
+		if entry.Expire.Before(time.Now()) {
 			// must not continue lock on entry until entry is being calculated!
 			entry.Unlock()
 			logger.Printf("thread %v:%s,waiting while other thread calculating\n", thread, r.key)
@@ -170,7 +194,7 @@ func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err 
 			defer entry.RUnlock()
 		} else {
 			defer entry.Unlock()
-			logger.Printf("thread %v, key %s already being updated by someone else", thread, r.key)
+			logger.Printf("thread %v, key %s already being updated by someone else but value still not expired", thread, r.key)
 		}
 		cc.pushValue(ctx, entry, r)
 		return entry.Err
@@ -195,12 +219,12 @@ func (cc *CachedCalculations) pushValue(ctx context.Context, entry *cacheEntry, 
 	thread := getThread(ctx)
 	if entry.Err != nil {
 		r.ready <- entry.Err
-		logger.Printf("thread %v, pushing error %s = %v", thread, r.key, entry.Err)
+		logger.Printf("thread %v, pushing error %s = %v to ready channel", thread, r.key, entry.Err)
 	} else {
 		// store value to the destination variable
 		r.ready <- deserialize(entry.Value, r.dest)
 		v := reflect.ValueOf(r.dest).Elem()
-		logger.Printf("thread %v, pushing value of %s : %v", thread, r.key, v)
+		logger.Printf("thread %v, pushing value of %s : %v to ready channel", thread, r.key, v)
 	}
 }
 
@@ -210,9 +234,12 @@ func getThread(ctx context.Context) any {
 }
 
 func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, entry *cacheEntry, pushValue bool) (err error) {
-	reason := "init entry"
+	reason := "entry expired"
 	thread := ctx.Value("thread")
 	hadValue := entry.Expire.After(time.Now())
+	if entry.Expire.IsZero() {
+		reason = "entry init"
+	}
 	if hadValue {
 		if pushValue {
 			cc.pushValue(ctx, entry, r)
@@ -221,7 +248,7 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 			defer entry.Unlock()
 			return entry.Err
 		}
-		reason = "refresh"
+		reason = "entry refresh"
 	}
 	// will be calculating/refreshing value
 	if entry.wait == nil {
@@ -229,29 +256,29 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	}
 	entry.Unlock() // should not
 	logger.Printf("thread %v,lock was released for entry %s\n", thread, r.key)
-	if r.limitWorker {
+	if r.limitWorkers {
 		// add new worker
 		logger.Printf("thread %v, entry %s, taking worker...\n", thread, r.key)
 		cc.limitWorkers <- struct{}{}
 	}
 	started := time.Now()
-	var v any
-	logger.Printf("thread %v:%s, reason %s calculating value...", thread, r.key, reason)
-	v, err = r.calculateValue(context.WithValue(ctx, "reason", reason))
+	logger.Printf("thread %v:%s, reason %s, calculating value...", thread, r.key, reason)
+	v, opt, err := r.calculateValue(context.WithValue(ctx, "reason", reason))
 	logger.Printf("thread %v,value %s (re)calculated to %v", thread, r.key, v)
-	calcDuration := time.Since(started)
-	now := time.Now()
-	minTTL := calcDuration * 2
-	if r.minTTL < minTTL {
-		r.minTTL = minTTL
-	}
-	if r.minTTL > r.maxTTL {
-		r.minTTL = r.maxTTL
-	}
-	if r.limitWorker {
+	if r.limitWorkers {
 		// pop worker
 		logger.Printf("thread %v, entry %s, releasing worker...\n", thread, r.key)
 		<-cc.limitWorkers
+	}
+	r.CachedCalcOpts = opt
+	calcDuration := time.Since(started)
+	now := time.Now()
+	minTTL := calcDuration * 2
+	if r.MinTTL < minTTL {
+		r.MinTTL = minTTL
+	}
+	if r.MinTTL > r.MaxTTL {
+		r.MinTTL = r.MaxTTL
 	}
 	logger.Printf("thread %v,waiting to lock entry %s for updating && broadcasting value is ready\n", thread, r.key)
 	entry.Lock()
@@ -263,8 +290,9 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	entry.wait = nil  // calculations complete
 	logger.Printf("thread %v,entry %s broadcast value %v is ready, setting cache entry\n", thread, r.key, v)
 	// update refresh and expire
-	entry.Refresh = now.Add(r.minTTL)
-	entry.Expire = now.Add(r.maxTTL)
+	entry.Refresh = now.Add(r.MinTTL)
+	entry.Expire = now.Add(r.MaxTTL)
+	logger.Printf("thread %v,entry %s refresh %v, expire %v\n", thread, r.key, now.Add(r.MinTTL), now.Add(r.MaxTTL))
 	entry.Unlock()
 	logger.Printf("thread %v,entry %s %v was unlocked\n", thread, r.key, v)
 	if !hadValue {

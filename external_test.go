@@ -9,6 +9,7 @@ import (
 )
 
 func init2Caches(t *testing.T, ctx context.Context) (sc1, sc2 *CachedCalculations) {
+	logger.Println("init 2(two) cached calculations")
 	externalCache, err := NewRedisCache(ctx)
 	if err != nil {
 		t.Skipf("skip test due external cache not available: %s", err)
@@ -32,6 +33,9 @@ func TestRemote(t *testing.T) {
 	var wg sync.WaitGroup
 	GetI1 := initCalcTest(t, &wg, cc1)
 	GetI2 := initCalcTest(t, &wg, cc2)
+	// make sure we remove the lock - could be left from previous sessions
+	err := cc1.externalCache.Del(ctx, "key.Lock")
+	require.NoError(t, err)
 	wg.Add(3)
 	GetI1(&d1, 1)
 	GetI2(&d2, 2)
@@ -47,7 +51,7 @@ func TestRemote(t *testing.T) {
 	require.Equal(t, 1, d1)
 	GetI1(&d2, 5) // still old value as calculations take time
 	require.Equal(t, 1, d2)
-	time.Sleep(tick * 2) // now it should be ready
+	time.Sleep(tick * 3) // now it should be ready
 	GetI2(&d3, 6)
 	require.Equal(t, 2, d3)
 	wg.Wait()
