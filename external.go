@@ -133,7 +133,7 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	return entry.Err
 }
 
-func getEntryValue(entry *cacheEntry, r *request) any {
+func getEntryValue(entry *CacheEntry, r *request) any {
 	entry.RLock()
 	defer entry.RUnlock()
 	deserialize(entry.Value, r.dest)

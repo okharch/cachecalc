@@ -33,7 +33,7 @@ type request struct {
 	CachedCalcOpts
 }
 
-type cacheEntry struct {
+type CacheEntry struct {
 	Expire  time.Time // time of expiration of this entry
 	Refresh time.Time // time when this value should be refreshed
 	Request time.Time // when this Value was last time requested. If it is not requested recently it will not be refreshed
@@ -58,7 +58,7 @@ type CachedCalculation struct {
 
 // CachedCalculations has the only method: GetCachedCalc. It is used for easy refactoring of slow/long calculating backend methods. See examples
 type CachedCalculations struct {
-	entries       map[string]*cacheEntry
+	entries       map[string]*CacheEntry
 	externalCache ExternalCache
 	workers       sync.WaitGroup
 	limitWorkers  chan struct{}
@@ -78,7 +78,7 @@ func init() {
 // This will gracefully finish the job of those threads
 func NewCachedCalculations(maxWorkers int, externalCache ExternalCache) *CachedCalculations {
 	var cc CachedCalculations
-	cc.entries = make(map[string]*cacheEntry, 1024*16)
+	cc.entries = make(map[string]*CacheEntry, 1024*16)
 	cc.externalCache = externalCache
 	cc.limitWorkers = make(chan struct{}, maxWorkers+1)
 	//cc.buf = new(bytes.Buffer)
@@ -202,20 +202,20 @@ func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err 
 	return cc.calculateValue(ctx, r, entry, true)
 }
 
-func (cc *CachedCalculations) obtainEntry(r *request) *cacheEntry {
+func (cc *CachedCalculations) obtainEntry(r *request) *CacheEntry {
 	cc.Lock()
 	defer cc.Unlock()
 	entry, exists := cc.entries[r.key]
 	if !exists {
 		// create new entry for internal memory as entry does not exist
-		entry = &cacheEntry{}
+		entry = &CacheEntry{}
 		cc.entries[r.key] = entry
 	}
 	entry.Lock()
 	return entry
 }
 
-func (cc *CachedCalculations) pushValue(ctx context.Context, entry *cacheEntry, r *request) {
+func (cc *CachedCalculations) pushValue(ctx context.Context, entry *CacheEntry, r *request) {
 	thread := getThread(ctx)
 	if entry.Err != nil {
 		r.ready <- entry.Err
@@ -233,7 +233,7 @@ func getThread(ctx context.Context) any {
 	return v
 }
 
-func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, entry *cacheEntry, pushValue bool) (err error) {
+func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, entry *CacheEntry, pushValue bool) (err error) {
 	reason := "entry expired"
 	thread := ctx.Value("thread")
 	hadValue := entry.Expire.After(time.Now())
@@ -313,17 +313,23 @@ func (cc *CachedCalculations) handleRequest(r *request) {
 	go obtain()
 }
 
-func entryNonEmpty(e *cacheEntry) bool {
+func entryNonEmpty(e *CacheEntry) bool {
 	return !e.Expire.IsZero()
 }
 
 func (cc *CachedCalculations) removeExpired() {
+	filter := func(_ string, e *CacheEntry) bool {
+		return e.wait == nil && !e.Expire.IsZero() && e.Expire.Before(time.Now())
+	}
+	cc.RemoveEntries(filter)
+}
+
+func (cc *CachedCalculations) RemoveEntries(filter func(key string, entry *CacheEntry) bool) {
 	cc.Lock()
 	defer cc.Unlock()
-	now := time.Now()
 	for k, e := range cc.entries {
 		e.Lock()
-		if e.wait == nil && !e.Expire.IsZero() && e.Expire.Before(now) {
+		if filter(k, e) {
 			delete(cc.entries, k)
 		}
 		e.Unlock()

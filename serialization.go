@@ -34,7 +34,7 @@ type ceSerialize struct {
 	Value   []byte
 }
 
-func serializeEntry(e *cacheEntry) (result []byte, err error) {
+func serializeEntry(e *CacheEntry) (result []byte, err error) {
 	var errMsg string
 	if e.Err != nil {
 		errMsg = e.Err.Error()
@@ -43,7 +43,7 @@ func serializeEntry(e *cacheEntry) (result []byte, err error) {
 	return serialize(ce)
 }
 
-func deserializeEntry(buf []byte, entry *cacheEntry) (err error) {
+func deserializeEntry(buf []byte, entry *CacheEntry) (err error) {
 	var e ceSerialize
 	err = deserialize(buf, &e)
 	if err != nil {

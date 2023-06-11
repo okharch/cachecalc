@@ -90,7 +90,7 @@ func TestRemoteConcurrent(t *testing.T) {
 func TestExternalCache(t *testing.T) {
 	ctx := context.TODO()
 	cc1, cc2 := init2Caches(t, ctx)
-	var entry cacheEntry
+	var entry CacheEntry
 	var err error
 	v, err := serialize(1)
 	require.NoError(t, err)
