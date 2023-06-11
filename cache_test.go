@@ -17,11 +17,11 @@ const expire = tick * 5
 const key = "key"
 
 var counter int
+var mu sync.Mutex
 
 func initCalcTest(t *testing.T, wg *sync.WaitGroup, cc *CachedCalculations) func(result *int, thread int) {
 	logger = log.New(os.Stderr, "", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
 	ctx := context.TODO()
-	var mu sync.Mutex
 	counter = 0
 	logger.Printf("init calculations")
 	DefaultCCs = NewCachedCalculations(4, nil)
