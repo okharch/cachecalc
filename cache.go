@@ -161,7 +161,7 @@ func (cc *CachedCalculations) Close() {
 		if wait != nil {
 			<-v.wait // CachedCalculations.Close()
 		}
-		delete(cc.entries, k)
+		delete(cc.entries, k) // Close()
 	}
 }
 
@@ -318,10 +318,10 @@ func entryNonEmpty(e *CacheEntry) bool {
 }
 
 func (cc *CachedCalculations) removeExpired() {
-	filter := func(_ string, e *CacheEntry) bool {
+	expired := func(_ string, e *CacheEntry) bool {
 		return e.wait == nil && !e.Expire.IsZero() && e.Expire.Before(time.Now())
 	}
-	cc.RemoveEntries(filter)
+	cc.RemoveEntries(expired)
 }
 
 func (cc *CachedCalculations) RemoveEntries(filter func(key string, entry *CacheEntry) bool) {
@@ -330,7 +330,8 @@ func (cc *CachedCalculations) RemoveEntries(filter func(key string, entry *Cache
 	for k, e := range cc.entries {
 		e.Lock()
 		if filter(k, e) {
-			delete(cc.entries, k)
+			logger.Printf("remove entry %s from cache upon expiration", k)
+			delete(cc.entries, k) // remove entry from cache upon expiration : RemoveEntries()
 		}
 		e.Unlock()
 	}

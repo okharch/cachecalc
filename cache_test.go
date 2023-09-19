@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const tick = time.Millisecond * 50
+const tick = time.Millisecond * 16
 const refresh = tick * 2
 const expire = tick * 5
 const key = "key"
@@ -107,4 +107,62 @@ func TestSimleCalc(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	v, err = GetCachedCalcOpt(ctx, "1", calc, true)
 	require.Equal(t, 2, v)
+}
+
+func TestGetCachedCalcOptX(t *testing.T) {
+	returnValue := 0
+	var mu sync.Mutex
+	logger = log.New(os.Stderr, "", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
+	const minTTL = tick * 2
+	const maxTTL = tick * 6
+	calc := func(ctx context.Context) (int, CachedCalcOpts, error) {
+		logger.Println("asking calc for value in thread ", ctx.Value("thread"), "wait ", tick)
+		time.Sleep(tick)
+		mu.Lock()
+		returnValue++
+		defer mu.Unlock()
+		logger.Println("calc will return ", returnValue)
+		return returnValue, CachedCalcOpts{
+			MaxTTL: maxTTL,
+			MinTTL: minTTL,
+		}, nil
+	}
+	ctx := context.WithValue(context.TODO(), "thread", 1)
+	cc := NewCachedCalculations(4, nil)
+	v, err := GetCachedCalcOptX(cc, ctx, "1", calc, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, v)
+	logger.Println("step 1 completed")
+	now := time.Now()
+	v, err = GetCachedCalcOptX(cc, ctx, "1", calc, true)
+	testImmediate(t, now)
+	require.Equal(t, 1, v)
+	logger.Println("step 2 completed")
+	logger.Println("waiting for key MinTTL expiration, it will return old value and run refresh calc in background so refreshed value will be available in 1 tick")
+	time.Sleep(minTTL + tick)
+	now = time.Now()
+	v, err = GetCachedCalcOptX(cc, ctx, "1", calc, true)
+	testImmediate(t, now)
+	require.NoError(t, err)
+	require.Equal(t, 1, v)
+	logger.Println("step 3 completed")
+	logger.Println("waiting for 2 ticks, value should be refreshed after that")
+	time.Sleep(tick * 2)
+	now = time.Now()
+	v, err = GetCachedCalcOptX(cc, ctx, "1", calc, true)
+	testImmediate(t, now)
+	require.NoError(t, err)
+	require.Equal(t, 2, v)
+	logger.Println("step 4 completed")
+	logger.Println("waiting for key MaxTTL expiration, value should be recalculated")
+	time.Sleep(maxTTL)
+	now = time.Now()
+	v, err = GetCachedCalcOptX(cc, ctx, "1", calc, true)
+	require.Equal(t, 3, v)
+	logger.Println("step 5 completed: value recalculated upon maxTTL expiration: ", time.Since(now))
+	require.True(t, time.Since(now) >= tick, "calculation should be refreshed, takes more than 1 tick")
+}
+
+func testImmediate(t *testing.T, now time.Time) {
+	require.True(t, time.Since(now) < tick, "calculation should be immediate")
 }
