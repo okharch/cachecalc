@@ -91,3 +91,14 @@ func TestSerializeEmptyEntry(t *testing.T) {
 	require.NoError(t, ce1.Err)
 	require.Nil(t, ce1.Value)
 }
+
+func TestDeserializeValue(t *testing.T) {
+	str := "Hello"
+	b, err := serialize(str)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	var strGot string
+	err = DeserializeValue(b, &strGot)
+	require.NoError(t, err)
+	require.Equal(t, str, strGot)
+}

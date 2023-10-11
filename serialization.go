@@ -57,3 +57,7 @@ func deserializeEntry(buf []byte, entry *CacheEntry) (err error) {
 	entry.Value = e.Value
 	return nil
 }
+
+func DeserializeValue(buf []byte, valPtr any) error {
+	return deserialize(buf, valPtr)
+}
