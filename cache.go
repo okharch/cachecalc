@@ -26,7 +26,7 @@ var DefaultCCs = NewCachedCalculations(4, nil)
 type request struct {
 	ctx            context.Context
 	calculateValue CalculateValueAndOpt
-	key            string
+	key            any
 	ready          chan error // error message, empty if no error
 	dest           any        // but provide pointer to the result!!!
 	limitWorkers   bool
@@ -46,19 +46,9 @@ type CacheEntry struct {
 	sync.RWMutex
 }
 
-// CachedCalculation defines parameters of coordinated calculation.
-// Parameter of this type is used for CachedCalculations.Get method
-type CachedCalculation struct {
-	Key         string         // key to store this calculation into cache
-	Calculate   CalculateValue // function called to create/refresh the value for the Key
-	LimitWorker bool           // true if it is heavy load and need to be limited concurrent workers like this
-	MinTTL      time.Duration  // until MinTTL value is returned from cache and is not being refreshed
-	MaxTTL      time.Duration  // when value expires completely and needs to be recalculated
-}
-
 // CachedCalculations has the only method: GetCachedCalc. It is used for easy refactoring of slow/long calculating backend methods. See examples
 type CachedCalculations struct {
-	entries       map[string]*CacheEntry
+	entries       map[any]*CacheEntry
 	externalCache ExternalCache
 	workers       sync.WaitGroup
 	limitWorkers  chan struct{}
@@ -78,7 +68,7 @@ func init() {
 // This will gracefully finish the job of those threads
 func NewCachedCalculations(maxWorkers int, externalCache ExternalCache) *CachedCalculations {
 	var cc CachedCalculations
-	cc.entries = make(map[string]*CacheEntry, 1024*16)
+	cc.entries = make(map[any]*CacheEntry, 1024*16)
 	cc.externalCache = externalCache
 	cc.limitWorkers = make(chan struct{}, maxWorkers+1)
 	//cc.buf = new(bytes.Buffer)
@@ -87,12 +77,12 @@ func NewCachedCalculations(maxWorkers int, externalCache ExternalCache) *CachedC
 
 // GetCachedCalc uses default cached calculations cache as GetCachedCalcX(DefaultCCs,...) for convenience
 // it is created with default for no external cache, but that can be redefined by app
-func GetCachedCalcOpt[T any](ctx context.Context, key string,
+func GetCachedCalcOpt[T any](ctx context.Context, key any,
 	calculateValueAndOpt func(ctx context.Context) (T, CachedCalcOpts, error), limitWorkers bool) (T, error) {
 	return GetCachedCalcOptX(DefaultCCs, ctx, key, calculateValueAndOpt, limitWorkers)
 }
 
-func GetCachedCalcOptX[T any](cc *CachedCalculations, ctx context.Context, key string,
+func GetCachedCalcOptX[T any](cc *CachedCalculations, ctx context.Context, key any,
 	calculateValueAndOpt func(ctx context.Context) (T, CachedCalcOpts, error), limitWorkers bool) (result T, err error) {
 	ready := make(chan error)
 	// cast calculateValueAndOpt to func(ctx context.Context) (any, CachedCalcOpts, error)
@@ -128,7 +118,7 @@ func GetCachedCalcOptX[T any](cc *CachedCalculations, ctx context.Context, key s
 
 // GetCachedCalc uses default cached calculations cache as GetCachedCalcX(DefaultCCs,...) for convenience
 // it is created with default for no external cache, but that can be redefined by app
-func GetCachedCalc[T any](ctx context.Context, key string, minTTL, maxTTL time.Duration, limitWorker bool,
+func GetCachedCalc[T any](ctx context.Context, key any, minTTL, maxTTL time.Duration, limitWorker bool,
 	calculateValue func(ctx context.Context) (T, error)) (result T, err error) {
 	return GetCachedCalcX(DefaultCCs, ctx, key, minTTL, maxTTL, limitWorker, calculateValue)
 }
@@ -138,8 +128,8 @@ func GetCachedCalc[T any](ctx context.Context, key string, minTTL, maxTTL time.D
 // ctx is a parent context for calculation
 // if parent context is cancelled then all child context are cancelled as well
 //
-// params of CachedCalculation - see description of how CachedCalculation defined
-func GetCachedCalcX[T any](cc *CachedCalculations, ctx context.Context, key string, minTTL, maxTTL time.Duration, limitWorker bool,
+// params of cachedCalculation - see description of how cachedCalculation defined
+func GetCachedCalcX[T any](cc *CachedCalculations, ctx context.Context, key any, minTTL, maxTTL time.Duration, limitWorker bool,
 	calculateValue func(ctx context.Context) (T, error)) (T, error) {
 	// cast calculateValueAndOpt to func(ctx context.Context) (any, CachedCalcOpts, error)
 	calcValue := func(ctx context.Context) (T, CachedCalcOpts, error) {
@@ -318,13 +308,13 @@ func entryNonEmpty(e *CacheEntry) bool {
 }
 
 func (cc *CachedCalculations) removeExpired() {
-	expired := func(_ string, e *CacheEntry) bool {
+	expired := func(_ any, e *CacheEntry) bool {
 		return e.wait == nil && !e.Expire.IsZero() && e.Expire.Before(time.Now())
 	}
 	cc.RemoveEntries(expired)
 }
 
-func (cc *CachedCalculations) RemoveEntries(filter func(key string, entry *CacheEntry) bool) {
+func (cc *CachedCalculations) RemoveEntries(filter func(key any, entry *CacheEntry) bool) {
 	cc.Lock()
 	defer cc.Unlock()
 	for k, e := range cc.entries {

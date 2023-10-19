@@ -114,7 +114,7 @@ func TestExternalCache(t *testing.T) {
 	require.True(t, exists)
 	require.NotZero(t, len(val))
 	require.Equal(t, se, val)
-	time.Sleep(expire)
+	time.Sleep(expire + tick)
 	val2, exists, err := cc2.externalCache.Get(ctx, key)
 	require.NoError(t, err)
 	require.False(t, exists) // key expired
