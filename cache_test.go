@@ -11,9 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const tick = time.Millisecond * 16
-const refresh = tick * 2
-const expire = tick * 5
+const tick = time.Millisecond * 100
+const refresh = tick * 4
+const expire = tick * 8
 const key = "key"
 
 var counter int

@@ -63,3 +63,32 @@ func TestRedisExtCache(t *testing.T) {
 	err = ecache.Set(ctx, "test", []byte("test"), time.Minute)
 	require.Error(t, err)
 }
+
+func TestExternalCacheRedis(t *testing.T) {
+	ctx := context.TODO()
+	externalCache, err := NewRedisCache(ctx)
+	if err != nil {
+		t.Skipf("skip test due external cache not available: %s", err)
+	}
+	testExternalCache(t, ctx, externalCache)
+
+}
+
+func TestRemoteConcurrentRedis(t *testing.T) {
+	ctx := context.TODO()
+	externalCache, err := NewRedisCache(ctx)
+	if err != nil {
+		t.Skipf("skip test due external cache not available: %s", err)
+	}
+	testRemoteConcurrent(t, ctx, externalCache)
+
+}
+
+func TestRemoteRedis(t *testing.T) {
+	ctx := context.TODO()
+	externalCache, err := NewRedisCache(ctx)
+	if err != nil {
+		t.Skipf("skip test due external cache not available: %s", err)
+	}
+	testRemote(t, ctx, externalCache)
+}

@@ -8,13 +8,9 @@ import (
 	"time"
 )
 
-func init2Caches(t *testing.T, ctx context.Context) (sc1, sc2 *CachedCalculations) {
+func init2Caches(t *testing.T, ctx context.Context, externalCache ExternalCache) (sc1, sc2 *CachedCalculations) {
 	logger.Println("init 2(two) cached calculations")
-	externalCache, err := NewRedisCache(ctx)
-	if err != nil {
-		t.Skipf("skip test due external cache not available: %s", err)
-	}
-	err = externalCache.Del(ctx, "key")
+	err := externalCache.Del(ctx, "key")
 	require.NoError(t, err)
 	err = externalCache.Del(ctx, "key.lock")
 	require.NoError(t, err)
@@ -26,9 +22,8 @@ func init2Caches(t *testing.T, ctx context.Context) (sc1, sc2 *CachedCalculation
 	return
 }
 
-func TestRemote(t *testing.T) {
-	ctx := context.TODO()
-	cc1, cc2 := init2Caches(t, ctx)
+func testRemote(t *testing.T, ctx context.Context, externalCache ExternalCache) {
+	cc1, cc2 := init2Caches(t, ctx, externalCache)
 	var d1, d2, d3 int
 	var wg sync.WaitGroup
 	GetI1 := initCalcTest(t, &wg, cc1)
@@ -58,9 +53,8 @@ func TestRemote(t *testing.T) {
 	DefaultCCs.Wait()
 }
 
-func TestRemoteConcurrent(t *testing.T) {
-	ctx := context.TODO()
-	cc1, cc2 := init2Caches(t, ctx)
+func testRemoteConcurrent(t *testing.T, ctx context.Context, externalCache ExternalCache) {
+	cc1, cc2 := init2Caches(t, ctx, externalCache)
 	var d1, d2, d3 int
 	var wg sync.WaitGroup
 	GetI1 := initCalcTest(t, &wg, cc1)
@@ -87,9 +81,8 @@ func TestRemoteConcurrent(t *testing.T) {
 	DefaultCCs.Wait()
 }
 
-func TestExternalCache(t *testing.T) {
-	ctx := context.TODO()
-	cc1, cc2 := init2Caches(t, ctx)
+func testExternalCache(t *testing.T, ctx context.Context, externalCache ExternalCache) {
+	cc1, cc2 := init2Caches(t, ctx, externalCache)
 	var entry CacheEntry
 	var err error
 	v, err := serialize(1)
@@ -119,5 +112,4 @@ func TestExternalCache(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, exists) // key expired
 	require.Zero(t, len(val2))
-
 }

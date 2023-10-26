@@ -2,8 +2,6 @@ package cachecalc
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"github.com/stretchr/testify/require"
 	"os"
 	"testing"
@@ -13,17 +11,19 @@ import (
 )
 
 func PostgreUrl() string {
-	//return "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
-	return os.Getenv("POSTGRE_URL")
+	url := os.Getenv("POSTGRE_URL")
+	if url == "" {
+		url = "postgres://dev:dev@localhost:29510/dev?sslmode=disable"
+	}
+	return url
 }
 
 // TestPostgresCache tests the PostgresCache implementation
 func TestPostgresCache(t *testing.T) {
 	// Adjust these variables to match your PostgreSQL configuration
-	dbURL := PostgreUrl()
 	ctx := context.Background()
-
 	// Initialize the cache
+	dbURL := PostgreUrl()
 	cache, err := NewPostgresCache(ctx, dbURL)
 	require.NoError(t, err, "create cache")
 	require.NotNil(t, cache)
@@ -104,35 +104,34 @@ func TestPostgresCache(t *testing.T) {
 
 }
 
-func TestMain(m *testing.M) {
-	// You can set up any database initialization or cleanup code here.
-	// Make sure to create a test database for unit tests and specify the connection URL.
+func TestExternalCachePostgres(t *testing.T) {
+	ctx := context.TODO()
 	dbURL := PostgreUrl()
-
-	// Initialize the database connection for tests
-	testDB, err := sql.Open("postgres", dbURL)
+	cache, err := NewPostgresCache(ctx, dbURL)
 	if err != nil {
-		fmt.Printf("Failed to open test database connection: %v", err)
+		t.Skipf("skip test due external cache not available: %s", err)
 	}
+	testExternalCache(t, ctx, cache)
 
-	// Create the cachecalc table for tests if it doesn't exist
-	_, err = testDB.Exec(`
-		CREATE TABLE IF NOT EXISTS cachecalc (
-			key text PRIMARY KEY,
-			value bytea NOT NULL
-		)`)
+}
+
+func TestRemoteConcurrentPostgres(t *testing.T) {
+	ctx := context.TODO()
+	dbURL := PostgreUrl()
+	cache, err := NewPostgresCache(ctx, dbURL)
 	if err != nil {
-		fmt.Printf("Failed to create test table: %v", err)
+		t.Skipf("skip test due external cache not available: %s", err)
 	}
+	testRemoteConcurrent(t, ctx, cache)
 
-	// Run the tests
-	exitCode := m.Run()
+}
 
-	// Cleanup and close the test database connection
-	if err := testDB.Close(); err != nil {
-		fmt.Printf("Failed to close test database connection: %v", err)
+func TestRemotePostgres(t *testing.T) {
+	ctx := context.TODO()
+	dbURL := PostgreUrl()
+	cache, err := NewPostgresCache(ctx, dbURL)
+	if err != nil {
+		t.Skipf("skip test due external cache not available: %s", err)
 	}
-
-	// Exit with the test result
-	os.Exit(exitCode)
+	testRemote(t, ctx, cache)
 }
