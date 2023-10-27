@@ -8,15 +8,15 @@ import (
 	"time"
 )
 
-func init2Caches(t *testing.T, ctx context.Context, externalCache ExternalCache) (sc1, sc2 *CachedCalculations) {
+func init2Caches(t *testing.T, ctx context.Context, initExternalCache func(ctx context.Context) ExternalCache) (sc1, sc2 *CachedCalculations) {
 	logger.Println("init 2(two) cached calculations")
-	err := externalCache.Del(ctx, "key")
+	ec1 := initExternalCache(ctx)
+	err := ec1.Del(ctx, "key")
 	require.NoError(t, err)
-	err = externalCache.Del(ctx, "key.lock")
+	err = ec1.Del(ctx, "key.lock")
 	require.NoError(t, err)
-	require.NotNil(t, externalCache)
-	sc1 = NewCachedCalculations(3, externalCache)
-	sc2 = NewCachedCalculations(3, externalCache)
+	sc1 = NewCachedCalculations(3, ec1)
+	sc2 = NewCachedCalculations(3, initExternalCache(ctx))
 	require.NotNil(t, sc1)
 	require.NotNil(t, sc2)
 	return
@@ -71,17 +71,24 @@ func testRemoteConcurrent(t *testing.T, ctx context.Context, initExternalCache f
 	require.Equal(t, 1, d1)
 	require.Equal(t, 1, d2)
 	require.Equal(t, 1, d3)
-	logger.Printf("force refresh by sleep for %v", refresh)
 	time.Sleep(refresh + tick)
+	logger.Printf("force refresh by sleep for %v", refresh)
 	wg.Add(3)
-	GetI2(&d1, 4)
+	go GetI2(&d1, 4)
 	require.Equal(t, 1, d1)
-	GetI1(&d2, 5)
+	go GetI1(&d2, 5)
 	require.Equal(t, 1, d2)
-	time.Sleep(tick * 2) // give time to be refreshed
-	GetI1(&d3, 6)
-	require.Equal(t, 2, d3)
+	logger.Printf("hold thread 6 so refreshed value will be available")
+	time.Sleep(tick * 3) // give time to be refreshed
+	go GetI1(&d3, 6)
 	wg.Wait()
+	// still previous call might return local value instead of refreshed remote, so lets wait and ask again, it had to refresh
+	time.Sleep(tick * 3) // give time to be refreshed
+	wg.Add(1)
+	// previous time
+	GetI1(&d3, 7)
+	wg.Wait()
+	require.Equal(t, 2, d3)
 	DefaultCCs.Wait()
 }
 
