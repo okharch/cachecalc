@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"github.com/stretchr/testify/require"
+	"log"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 func TestRedisExtCache(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
+	logger.Println("TestRedisExtCache...")
 	ecache, err := NewRedisCache(ctx)
 	if err != nil {
 		t.Skipf("Redis not available: %s", err)
@@ -64,31 +66,31 @@ func TestRedisExtCache(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestExternalCacheRedis(t *testing.T) {
-	ctx := context.TODO()
-	externalCache, err := NewRedisCache(ctx)
-	if err != nil {
-		t.Skipf("skip test due external cache not available: %s", err)
+func initRedisCache(t *testing.T) func(context.Context) ExternalCache {
+	return func(ctx context.Context) ExternalCache {
+		externalCache, err := NewRedisCache(ctx)
+		if err != nil {
+			t.Skipf("skip test due external cache not available: %s", err)
+		}
+		return externalCache
 	}
-	testExternalCache(t, ctx, externalCache)
-
 }
 
-func TestRemoteConcurrentRedis(t *testing.T) {
+func TestExternalCacheRedis(t *testing.T) {
+	log.Println("TestExternalCacheRedis...")
 	ctx := context.TODO()
-	externalCache, err := NewRedisCache(ctx)
-	if err != nil {
-		t.Skipf("skip test due external cache not available: %s", err)
-	}
-	testRemoteConcurrent(t, ctx, externalCache)
+	testExternalCache(t, ctx, initRedisCache(t))
 
 }
 
 func TestRemoteRedis(t *testing.T) {
+	log.Println("TestRemoteRedis...")
 	ctx := context.TODO()
-	externalCache, err := NewRedisCache(ctx)
-	if err != nil {
-		t.Skipf("skip test due external cache not available: %s", err)
-	}
-	testRemote(t, ctx, externalCache)
+	testRemote(t, ctx, initRedisCache(t))
+}
+
+func TestRemoteConcurrentRedis(t *testing.T) {
+	log.Println("TestRemoteConcurrentRedis...")
+	ctx := context.TODO()
+	testRemoteConcurrent(t, ctx, initRedisCache(t))
 }
