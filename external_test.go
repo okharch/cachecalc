@@ -22,8 +22,10 @@ func init2Caches(t *testing.T, ctx context.Context, externalCache ExternalCache)
 	return
 }
 
-func testRemote(t *testing.T, ctx context.Context, externalCache ExternalCache) {
-	cc1, cc2 := init2Caches(t, ctx, externalCache)
+func testRemote(t *testing.T, ctx context.Context, initExternalCache func(ctx context.Context) ExternalCache) {
+	cc1, cc2 := init2Caches(t, ctx, initExternalCache)
+	defer cc1.Close()
+	defer cc2.Close()
 	var d1, d2, d3 int
 	var wg sync.WaitGroup
 	GetI1 := initCalcTest(t, &wg, cc1)
@@ -53,8 +55,10 @@ func testRemote(t *testing.T, ctx context.Context, externalCache ExternalCache) 
 	DefaultCCs.Wait()
 }
 
-func testRemoteConcurrent(t *testing.T, ctx context.Context, externalCache ExternalCache) {
-	cc1, cc2 := init2Caches(t, ctx, externalCache)
+func testRemoteConcurrent(t *testing.T, ctx context.Context, initExternalCache func(ctx context.Context) ExternalCache) {
+	cc1, cc2 := init2Caches(t, ctx, initExternalCache)
+	defer cc1.Close()
+	defer cc2.Close()
 	var d1, d2, d3 int
 	var wg sync.WaitGroup
 	GetI1 := initCalcTest(t, &wg, cc1)
@@ -81,8 +85,10 @@ func testRemoteConcurrent(t *testing.T, ctx context.Context, externalCache Exter
 	DefaultCCs.Wait()
 }
 
-func testExternalCache(t *testing.T, ctx context.Context, externalCache ExternalCache) {
-	cc1, cc2 := init2Caches(t, ctx, externalCache)
+func testExternalCache(t *testing.T, ctx context.Context, initExternalCache func(ctx context.Context) ExternalCache) {
+	cc1, cc2 := init2Caches(t, ctx, initExternalCache)
+	defer cc1.Close()
+	defer cc2.Close()
 	var entry CacheEntry
 	var err error
 	v, err := serialize(1)

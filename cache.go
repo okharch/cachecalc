@@ -144,6 +144,7 @@ func GetCachedCalcX[T any](cc *CachedCalculations, ctx context.Context, key any,
 // it tries to gracefully interrupt all ongoing calculations using their context
 // when it succeeds in this it removes the record about job
 func (cc *CachedCalculations) Close() {
+	cc.Wait()
 	cc.Lock()
 	defer cc.Unlock()
 	for k, v := range cc.entries {
@@ -152,6 +153,9 @@ func (cc *CachedCalculations) Close() {
 			<-v.wait // CachedCalculations.Close()
 		}
 		delete(cc.entries, k) // Close()
+	}
+	if cc.externalCache != nil {
+		cc.externalCache.Close()
 	}
 }
 

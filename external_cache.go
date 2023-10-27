@@ -25,4 +25,5 @@ type ExternalCache interface {
 	Get(ctx context.Context, key string) (value []byte, exists bool, err error)
 	// Del Removes the specified key. A key is ignored if it does not exist.
 	Del(ctx context.Context, key string) error
+	Close() error // closes the connection
 }

@@ -71,3 +71,7 @@ func NewRedisCache(ctx context.Context) (ExternalCache, error) {
 	rec := &RedisExternalCache{client}
 	return rec, nil
 }
+
+func (r *RedisExternalCache) Close() error {
+	return r.client.Close()
+}

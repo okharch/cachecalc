@@ -120,3 +120,8 @@ func (c *SQLiteCache) Del(ctx context.Context, key string) error {
 
 	return nil
 }
+
+// Close closes the SQLite database connection.
+func (c *SQLiteCache) Close() error {
+	return c.db.Close()
+}

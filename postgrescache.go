@@ -102,3 +102,10 @@ func (p *PostgresCache) Del(ctx context.Context, key string) error {
 	_, err := p.db.ExecContext(ctx, deleteKeyQuery, key)
 	return err
 }
+
+func (p *PostgresCache) Close() error {
+	if err := p.purgeExpired(context.TODO()); err != nil {
+		return err
+	}
+	return p.db.Close()
+}
