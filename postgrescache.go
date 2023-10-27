@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	_ "github.com/lib/pq" // Import the pq driver
+	"strings"
 	"time"
 )
 
@@ -18,7 +19,7 @@ const (
 
 	upsertValueQuery = `INSERT INTO postgres_cache_key_value_expired_v_1_4(key, value, expires_at) VALUES($1, $2, $3)
 		ON CONFLICT (key) DO UPDATE SET value = $2, expires_at = $3`
-	insertIfNotExistQuery = `INSERT INTO postgres_cache_key_value_expired_v_1_4(key, value, expires_at) VALUES($1, $2, $3) ON CONFLICT (key) DO NOTHING`
+	insertIfNotExistQuery = `INSERT INTO postgres_cache_key_value_expired_v_1_4(key, value, expires_at) VALUES($1, $2, $3)`
 	getValueQuery         = `SELECT value FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1 and expires_at>now()`
 	deleteKeyQuery        = `DELETE FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1`
 )
@@ -52,16 +53,22 @@ func NewPostgresCache(ctx context.Context, dbUrl string) (ExternalCache, error) 
 }
 
 func (p *PostgresCache) purgeExpired(ctx context.Context) error {
-	_, err := p.db.ExecContext(ctx, deleteExpiredQuery)
+	thread := getThread(ctx)
+	r, err := p.db.ExecContext(ctx, deleteExpiredQuery)
 	if err != nil {
 		err = fmt.Errorf("failed to purge expired items: %w", err)
+		return err
 	}
-
+	rowsAffected, _ := r.RowsAffected()
+	if rowsAffected > 0 {
+		logger.Printf("thread %v: purged %d records", thread, rowsAffected)
+	}
 	return err
 }
 
 func (p *PostgresCache) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
-	expiresAt := time.Now().Add(ttl).UTC()
+	fixTTL := nzDuration(ttl)
+	expiresAt := time.Now().Add(fixTTL).UTC()
 	_, err := p.db.ExecContext(ctx, upsertValueQuery, key, value, expiresAt)
 
 	return err
@@ -71,19 +78,20 @@ func (p *PostgresCache) SetNX(ctx context.Context, key string, value []byte, ttl
 	if err = p.purgeExpired(ctx); err != nil {
 		return
 	}
-	expiresAt := time.Now().Add(ttl).UTC()
-	r, err := p.db.ExecContext(ctx, insertIfNotExistQuery, key, value, expiresAt)
+	fixTTL := nzDuration(ttl)
+	expiresAt := time.Now().Add(fixTTL).UTC()
+	_, err = p.db.ExecContext(ctx, insertIfNotExistQuery, key, value, expiresAt)
 
 	if err != nil {
-		if err.Error() == "pq: duplicate key value violates unique constraint \"cachecalc_key_key\"" {
+		msg := err.Error()
+		if strings.Contains(msg, "unique constraint") || strings.Contains(msg, "duplicate key") {
 			return false, nil
 		}
 		return false, err
 	}
-	affected, err := r.RowsAffected()
-	keyCreated = affected > 0
-
-	return
+	thread := getThread(ctx)
+	logger.Printf("thread %v: %s=%s expired in %dms", thread, key, string(value), fixTTL.Milliseconds())
+	return true, nil
 }
 
 func (p *PostgresCache) Get(ctx context.Context, key string) (value []byte, exists bool, err error) {
@@ -94,12 +102,16 @@ func (p *PostgresCache) Get(ctx context.Context, key string) (value []byte, exis
 	if err != nil {
 		return nil, false, err
 	}
+	thread := getThread(ctx)
+	logger.Printf("thread %v: obtained value", thread)
 
 	return value, true, nil
 }
 
 func (p *PostgresCache) Del(ctx context.Context, key string) error {
+	thread := getThread(ctx)
 	_, err := p.db.ExecContext(ctx, deleteKeyQuery, key)
+	logger.Printf("thread %v: deleted %s", thread, key)
 	return err
 }
 

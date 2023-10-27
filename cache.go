@@ -11,6 +11,7 @@ import (
 
 type CachedCalcOpts struct {
 	MaxTTL, MinTTL time.Duration
+	CalcTime       time.Duration // the duration of last calculation
 }
 
 // CalculateValue this is type of function which returns interface{} type
@@ -34,11 +35,11 @@ type request struct {
 }
 
 type CacheEntry struct {
-	Expire  time.Time // time of expiration of this entry
-	Refresh time.Time // time when this value should be refreshed
-	Request time.Time // when this Value was last time requested. If it is not requested recently it will not be refreshed
-	Err     error     // stores the last error status of calculations
-	Value   []byte    // stores the serialized value of last calculations
+	Expire       time.Time     // time of expiration of this entry
+	Refresh      time.Time     // time when this value should be refreshed
+	CalcDuration time.Duration // how much time it took to calculate the value
+	Err          error         // stores the last error status of calculations
+	Value        []byte        // stores the serialized value of last calculations
 	// wait is channel which, if not nil, signals about ongoing calculation on the item.
 	// It is closed by issuer to inform interested clients on end of calculations
 	wait chan struct{}
@@ -133,8 +134,9 @@ func GetCachedCalcX[T any](cc *CachedCalculations, ctx context.Context, key any,
 	calculateValue func(ctx context.Context) (T, error)) (T, error) {
 	// cast calculateValueAndOpt to func(ctx context.Context) (any, CachedCalcOpts, error)
 	calcValue := func(ctx context.Context) (T, CachedCalcOpts, error) {
+		started := time.Now()
 		result, err := calculateValue(ctx)
-		opt := CachedCalcOpts{MaxTTL: maxTTL, MinTTL: minTTL}
+		opt := CachedCalcOpts{MaxTTL: maxTTL, MinTTL: minTTL, CalcTime: time.Since(started)}
 		return result, opt, err
 	}
 	return GetCachedCalcOptX(cc, ctx, key, calcValue, limitWorker)
@@ -196,6 +198,9 @@ func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err 
 	return cc.calculateValue(ctx, r, entry, true)
 }
 
+// obtainEntry locks local cache and checks whether entry exist.
+// if it is not it adds new entry to the local cache
+// it locks the returned entry so the caller must release it
 func (cc *CachedCalculations) obtainEntry(r *request) *CacheEntry {
 	cc.Lock()
 	defer cc.Unlock()
@@ -218,7 +223,7 @@ func (cc *CachedCalculations) pushValue(ctx context.Context, entry *CacheEntry, 
 		// store value to the destination variable
 		r.ready <- deserialize(entry.Value, r.dest)
 		v := reflect.ValueOf(r.dest).Elem()
-		logger.Printf("thread %v, pushing value of %s : %v to ready channel", thread, r.key, v)
+		logger.Printf("thread %v, pushing value %v of %s : %v to ready channel", thread, getEntryValue(entry, r), r.key, v)
 	}
 }
 
@@ -239,7 +244,7 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 			cc.pushValue(ctx, entry, r)
 		}
 		if entry.Refresh.After(time.Now()) {
-			defer entry.Unlock()
+			entry.Unlock()
 			return entry.Err
 		}
 		reason = "entry refresh"
@@ -248,7 +253,7 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	if entry.wait == nil {
 		entry.wait = make(chan struct{}) // mark that calculation is being performed for this entry
 	}
-	entry.Unlock() // should not
+	entry.Unlock() // it was locked before calculateValue
 	logger.Printf("thread %v,lock was released for entry %s\n", thread, r.key)
 	if r.limitWorkers {
 		// add new worker
@@ -258,7 +263,7 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	started := time.Now()
 	logger.Printf("thread %v:%s, reason %s, calculating value...", thread, r.key, reason)
 	v, opt, err := r.calculateValue(context.WithValue(ctx, "reason", reason))
-	logger.Printf("thread %v,value %s (re)calculated to %v", thread, r.key, v)
+	logger.Printf("thread %v,value %s calculated to %v, reason: %s", thread, r.key, v, reason)
 	if r.limitWorkers {
 		// pop worker
 		logger.Printf("thread %v, entry %s, releasing worker...\n", thread, r.key)
@@ -280,13 +285,14 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 		entry.Value, err = serialize(v)
 	}
 	entry.Err = err
+	entry.CalcDuration = calcDuration
 	close(entry.wait) // broadcast result of local calculation to clients
 	entry.wait = nil  // calculations complete
 	logger.Printf("thread %v,entry %s broadcast value %v is ready, setting cache entry\n", thread, r.key, v)
 	// update refresh and expire
 	entry.Refresh = now.Add(r.MinTTL)
 	entry.Expire = now.Add(r.MaxTTL)
-	logger.Printf("thread %v,entry %s refresh %v, expire %v\n", thread, r.key, now.Add(r.MinTTL), now.Add(r.MaxTTL))
+	logger.Printf("thread %v,entry %s refresh +%v:%v, expire +%v:%v\n", thread, r.key, r.MinTTL, now.Add(r.MinTTL), r.MaxTTL, now.Add(r.MaxTTL))
 	entry.Unlock()
 	logger.Printf("thread %v,entry %s %v was unlocked\n", thread, r.key, v)
 	if !hadValue {
@@ -329,4 +335,13 @@ func (cc *CachedCalculations) RemoveEntries(filter func(key any, entry *CacheEnt
 		}
 		e.Unlock()
 	}
+}
+
+func nzDuration(durations ...time.Duration) time.Duration {
+	for _, d := range durations {
+		if d != 0 {
+			return d
+		}
+	}
+	return time.Hour
 }

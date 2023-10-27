@@ -12,17 +12,17 @@ import (
 )
 
 const tick = time.Millisecond * 100
-const refresh = tick * 4
-const expire = tick * 8
+const refresh = tick * 3
+const expire = tick * 20
 const key = "key"
 
 var counter int
 var mu sync.Mutex
 
 func initCalcTest(t *testing.T, wg *sync.WaitGroup, cc *CachedCalculations) func(result *int, thread int) {
+	counter = 0
 	logger = log.New(os.Stderr, "", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
 	ctx := context.TODO()
-	counter = 0
 	logger.Printf("init calculations")
 	DefaultCCs = NewCachedCalculations(4, nil)
 	getI := func(ctx context.Context) (int, error) {
@@ -59,6 +59,7 @@ func TestLocalSimple(t *testing.T) {
 	for i := 0; i < nThreads; i++ {
 		require.Equal(t, 1, dest[i])
 	}
+	DefaultCCs.Close()
 }
 
 func TestLocal(t *testing.T) {
@@ -77,7 +78,7 @@ func TestLocal(t *testing.T) {
 	GetI(&d3, 3)
 	require.Equal(t, 2, d3)
 	wg.Wait()
-	DefaultCCs.Wait()
+	DefaultCCs.Close()
 }
 
 func TestSimleCalc(t *testing.T) {
@@ -107,6 +108,7 @@ func TestSimleCalc(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	v, err = GetCachedCalcOpt(ctx, "1", calc, true)
 	require.Equal(t, 2, v)
+	DefaultCCs.Close()
 }
 
 func TestGetCachedCalcOptX(t *testing.T) {
@@ -161,6 +163,7 @@ func TestGetCachedCalcOptX(t *testing.T) {
 	require.Equal(t, 3, v)
 	logger.Println("step 5 completed: value recalculated upon maxTTL expiration: ", time.Since(now))
 	require.True(t, time.Since(now) >= tick, "calculation should be refreshed, takes more than 1 tick")
+	DefaultCCs.Close()
 }
 
 func testImmediate(t *testing.T, now time.Time) {

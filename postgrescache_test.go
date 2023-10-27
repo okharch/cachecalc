@@ -24,6 +24,7 @@ func TestPostgresCache(t *testing.T) {
 	ctx := context.Background()
 	// Initialize the cache
 	dbURL := PostgreUrl()
+	logger.Println("TestPostgresCache...")
 	cache, err := NewPostgresCache(ctx, dbURL)
 	require.NoError(t, err, "create cache")
 	require.NotNil(t, cache)
@@ -106,32 +107,31 @@ func TestPostgresCache(t *testing.T) {
 
 func TestExternalCachePostgres(t *testing.T) {
 	ctx := context.TODO()
-	dbURL := PostgreUrl()
-	cache, err := NewPostgresCache(ctx, dbURL)
-	if err != nil {
-		t.Skipf("skip test due external cache not available: %s", err)
-	}
-	testExternalCache(t, ctx, cache)
+	logger.Println("TestExternalCachePostgres...")
+	testExternalCache(t, ctx, initPgCache(t))
 
 }
 
-func TestRemoteConcurrentPostgres(t *testing.T) {
-	ctx := context.TODO()
+func initPgCache(t *testing.T) func(context.Context) ExternalCache {
 	dbURL := PostgreUrl()
-	cache, err := NewPostgresCache(ctx, dbURL)
-	if err != nil {
-		t.Skipf("skip test due external cache not available: %s", err)
+	return func(ctx context.Context) ExternalCache {
+		cache, err := NewPostgresCache(ctx, dbURL)
+		if err != nil {
+			t.Skipf("skip test due external cache not available: %s", err)
+		}
+		return cache
 	}
-	testRemoteConcurrent(t, ctx, cache)
-
 }
 
 func TestRemotePostgres(t *testing.T) {
 	ctx := context.TODO()
-	dbURL := PostgreUrl()
-	cache, err := NewPostgresCache(ctx, dbURL)
-	if err != nil {
-		t.Skipf("skip test due external cache not available: %s", err)
-	}
-	testRemote(t, ctx, cache)
+	logger.Printf("TestRemotePostgres...")
+	testRemote(t, ctx, initPgCache(t))
+}
+
+func TestRemoteConcurrentPostgres(t *testing.T) {
+	ctx := context.TODO()
+	logger.Printf("TestRemoteConcurrentPostgres...")
+	testRemoteConcurrent(t, ctx, initPgCache(t))
+
 }
