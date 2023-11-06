@@ -3,6 +3,7 @@ package cachecalc
 import (
 	"context"
 	"github.com/stretchr/testify/require"
+	"log"
 	"os"
 	"testing"
 	"time"
@@ -38,10 +39,10 @@ func TestPostgresCache(t *testing.T) {
 	}()
 
 	// Test Set and Get
-	key := "test_key"
-	value := []byte("test_value")
+	key := getRandomKey(t)
+	value := "test_value"
 
-	err = cache.Set(ctx, key, value, time.Second)
+	err = cache.Set(ctx, key, []byte(value), time.Second)
 	if err != nil {
 		t.Fatalf("Failed to set key: %v", err)
 	}
@@ -51,7 +52,7 @@ func TestPostgresCache(t *testing.T) {
 		t.Fatalf("Failed to get key: %v", err)
 	}
 
-	if !exists || string(cachedValue) != "test_value" {
+	if !exists || string(cachedValue) != value {
 		t.Fatalf("Expected key '%s' to exist with value 'test_value', but it didn't.", key)
 	}
 
@@ -125,13 +126,13 @@ func initPgCache(t *testing.T) func(context.Context) ExternalCache {
 
 func TestRemotePostgres(t *testing.T) {
 	ctx := context.TODO()
-	logger.Printf("TestRemotePostgres...")
+	log.Printf("TestRemotePostgres...")
 	testRemote(t, ctx, initPgCache(t))
 }
 
 func TestRemoteConcurrentPostgres(t *testing.T) {
 	ctx := context.TODO()
-	logger.Printf("TestRemoteConcurrentPostgres...")
+	log.Printf("TestRemoteConcurrentPostgres...")
 	testRemoteConcurrent(t, ctx, initPgCache(t))
 
 }

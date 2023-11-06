@@ -11,10 +11,6 @@ import (
 func init2Caches(t *testing.T, ctx context.Context, initExternalCache func(ctx context.Context) ExternalCache) (sc1, sc2 *CachedCalculations) {
 	logger.Println("init 2(two) cached calculations")
 	ec1 := initExternalCache(ctx)
-	err := ec1.Del(ctx, "key")
-	require.NoError(t, err)
-	err = ec1.Del(ctx, "key.lock")
-	require.NoError(t, err)
 	sc1 = NewCachedCalculations(3, ec1)
 	sc2 = NewCachedCalculations(3, initExternalCache(ctx))
 	require.NotNil(t, sc1)
@@ -28,11 +24,10 @@ func testRemote(t *testing.T, ctx context.Context, initExternalCache func(ctx co
 	defer cc2.Close()
 	var d1, d2, d3 int
 	var wg sync.WaitGroup
-	GetI1 := initCalcTest(t, &wg, cc1)
-	GetI2 := initCalcTest(t, &wg, cc2)
+	key := getRandomKey(t)
+	GetI1 := initCalcTest(t, &wg, cc1, key)
+	GetI2 := initCalcTest(t, &wg, cc2, key)
 	// make sure we remove the lock - could be left from previous sessions
-	err := cc1.externalCache.Del(ctx, "key.Lock")
-	require.NoError(t, err)
 	wg.Add(3)
 	GetI1(&d1, 1)
 	GetI2(&d2, 2)
@@ -46,9 +41,10 @@ func testRemote(t *testing.T, ctx context.Context, initExternalCache func(ctx co
 	time.Sleep(refresh + tick)
 	GetI2(&d1, 4) // should still return old value but run refresh calculations
 	require.Equal(t, 1, d1)
-	GetI1(&d2, 5) // still old value as calculations take time
+	time.Sleep(tick) // need to wait here to give time for 4 for taking lock and starting calculations
+	GetI1(&d2, 5)    // still old value as calculations take time
 	require.Equal(t, 1, d2)
-	time.Sleep(tick * 3) // now it should be ready
+	time.Sleep(tick) // now it should be ready
 	GetI2(&d3, 6)
 	require.Equal(t, 2, d3)
 	wg.Wait()
@@ -61,8 +57,9 @@ func testRemoteConcurrent(t *testing.T, ctx context.Context, initExternalCache f
 	defer cc2.Close()
 	var d1, d2, d3 int
 	var wg sync.WaitGroup
-	GetI1 := initCalcTest(t, &wg, cc1)
-	GetI2 := initCalcTest(t, &wg, cc2)
+	key := getRandomKey(t)
+	GetI1 := initCalcTest(t, &wg, cc1, key)
+	GetI2 := initCalcTest(t, &wg, cc2, key)
 	wg.Add(3)
 	go GetI1(&d1, 1)
 	go GetI2(&d2, 2)
@@ -102,7 +99,8 @@ func testExternalCache(t *testing.T, ctx context.Context, initExternalCache func
 	require.NoError(t, err)
 	require.NotNil(t, v)
 	entry.Value = v
-	lockKey := key + ".lock"
+	key := getRandomKey(t)
+	lockKey := getKeyLock(key)
 	created, err := cc1.externalCache.SetNX(ctx, lockKey, v, expire)
 	require.NoError(t, err)
 	require.True(t, created)

@@ -90,7 +90,7 @@ func (p *PostgresCache) SetNX(ctx context.Context, key string, value []byte, ttl
 		return false, err
 	}
 	thread := getThread(ctx)
-	logger.Printf("thread %v: %s=%s expired in %dms", thread, key, string(value), fixTTL.Milliseconds())
+	logger.Printf("thread %v: %s=%s expires in %dms", thread, key, string(value), fixTTL.Milliseconds())
 	return true, nil
 }
 

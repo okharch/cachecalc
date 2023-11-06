@@ -2,8 +2,8 @@ package cachecalc
 
 import (
 	"context"
-	"log"
-	"os"
+	"crypto/rand"
+	"encoding/hex"
 	"sync"
 	"testing"
 	"time"
@@ -11,20 +11,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const tick = time.Millisecond * 100
+const tick = time.Millisecond * 20
 const refresh = tick * 3
 const expire = tick * 20
-const key = "key"
 
 var counter int
 var mu sync.Mutex
 
-func initCalcTest(t *testing.T, wg *sync.WaitGroup, cc *CachedCalculations) func(result *int, thread int) {
+func initCalcTest(t *testing.T, wg *sync.WaitGroup, cc *CachedCalculations, key string) func(result *int, thread int) {
 	counter = 0
-	logger = log.New(os.Stderr, "", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
 	ctx := context.TODO()
 	logger.Printf("init calculations")
-	DefaultCCs = NewCachedCalculations(4, nil)
+	if cc != nil && cc.externalCache != nil {
+		err := cc.externalCache.Del(ctx, key)
+		require.NoError(t, err)
+		err = cc.externalCache.Del(ctx, key+".lock")
+		require.NoError(t, err)
+	}
 	getI := func(ctx context.Context) (int, error) {
 		time.Sleep(tick)
 		mu.Lock()
@@ -35,17 +38,49 @@ func initCalcTest(t *testing.T, wg *sync.WaitGroup, cc *CachedCalculations) func
 	GetI := func(result *int, thread int) {
 		defer wg.Done()
 		ctx := context.WithValue(ctx, "thread", thread)
-		r, err := GetCachedCalcX(cc, ctx, "key", refresh, expire, true, getI)
+		r, err := GetCachedCalcX(cc, ctx, key, refresh, expire, true, getI)
 		require.NoError(t, err)
 		*result = r
 	}
 	return GetI
 }
 
+func randomHexString(length int) (string, error) {
+	// Calculate the number of bytes needed for the given length
+	byteLength := length / 2
+	if length%2 != 0 {
+		byteLength++
+	}
+
+	// Generate random bytes
+	bytes := make([]byte, byteLength)
+	_, err := rand.Read(bytes)
+	if err != nil {
+		return "", err
+	}
+
+	// Convert the random bytes to a hexadecimal string
+	hexString := hex.EncodeToString(bytes)
+
+	// Trim the string to the desired length
+	if len(hexString) > length {
+		hexString = hexString[:length]
+	}
+
+	return hexString, nil
+}
+
+func getRandomKey(t *testing.T) string {
+	s, err := randomHexString(4)
+	require.NoError(t, err)
+	return s
+}
+
 func TestLocalSimple(t *testing.T) {
 	const nThreads = 10
 	var wg sync.WaitGroup
-	GetI := initCalcTest(t, &wg, DefaultCCs)
+	cc := NewCachedCalculations(4, nil)
+	GetI := initCalcTest(t, &wg, cc, getRandomKey(t))
 	wg.Add(nThreads)
 	dest := make([]int, nThreads)
 	for i := 0; i < nThreads; i++ {
@@ -55,17 +90,18 @@ func TestLocalSimple(t *testing.T) {
 	}
 	wg.Wait()
 	logger.Println("waiting for calc coordinator to finish operations")
-	DefaultCCs.Wait()
+	cc.Wait()
 	for i := 0; i < nThreads; i++ {
 		require.Equal(t, 1, dest[i])
 	}
-	DefaultCCs.Close()
+	cc.Close()
 }
 
 func TestLocal(t *testing.T) {
 	var d1, d2, d3 int
 	var wg sync.WaitGroup
-	GetI := initCalcTest(t, &wg, DefaultCCs)
+	cc := NewCachedCalculations(4, nil)
+	GetI := initCalcTest(t, &wg, cc, getRandomKey(t))
 	wg.Add(4)
 	GetI(&d1, 1)
 	require.Equal(t, 1, d1)
@@ -78,13 +114,12 @@ func TestLocal(t *testing.T) {
 	GetI(&d3, 3)
 	require.Equal(t, 2, d3)
 	wg.Wait()
-	DefaultCCs.Close()
+	cc.Close()
 }
 
-func TestSimleCalc(t *testing.T) {
+func TestSimpleCalc(t *testing.T) {
 	returnValue := 0
 	var mu sync.Mutex
-	logger = log.New(os.Stderr, "", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
 	calc := func(ctx context.Context) (int, CachedCalcOpts, error) {
 		time.Sleep(time.Millisecond * 20)
 		mu.Lock()
@@ -96,25 +131,24 @@ func TestSimleCalc(t *testing.T) {
 			MinTTL: 200 * time.Millisecond,
 		}, nil
 	}
+	key := getRandomKey(t)
 	ctx := context.WithValue(context.TODO(), "thread", 1)
-	v, err := GetCachedCalcOpt(ctx, "1", calc, true)
+	v, err := GetCachedCalcOpt(ctx, key, calc, true)
 	require.NoError(t, err)
 	require.Equal(t, returnValue, v)
 	logger.Println("step 1 completed")
-	v, err = GetCachedCalcOpt(ctx, "1", calc, true)
+	v, err = GetCachedCalcOpt(ctx, key, calc, true)
 	require.Equal(t, 1, v)
 	logger.Println("step 2 completed")
 	logger.Println("waiting for key expiration, so value will be refreshed")
 	time.Sleep(500 * time.Millisecond)
-	v, err = GetCachedCalcOpt(ctx, "1", calc, true)
+	v, err = GetCachedCalcOpt(ctx, key, calc, true)
 	require.Equal(t, 2, v)
-	DefaultCCs.Close()
 }
 
 func TestGetCachedCalcOptX(t *testing.T) {
 	returnValue := 0
 	var mu sync.Mutex
-	logger = log.New(os.Stderr, "", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
 	const minTTL = tick * 2
 	const maxTTL = tick * 6
 	calc := func(ctx context.Context) (int, CachedCalcOpts, error) {
