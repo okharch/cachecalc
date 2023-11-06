@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/stretchr/testify/require"
 	"io/ioutil"
+	"log"
 	"os"
 	"testing"
 	"time"
@@ -67,4 +68,42 @@ func TestSQLiteCache(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, exists)
 	assert.Nil(t, value)
+}
+
+var sqliteFile *os.File
+
+func initSqlite(t *testing.T) {
+	var err error
+	if sqliteFile != nil {
+		return
+	}
+	sqliteFile, err = ioutil.TempFile("", "sqlitecache")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func initSqliteCache(t *testing.T) func(context.Context) ExternalCache {
+	initSqlite(t)
+	return func(ctx context.Context) ExternalCache {
+		// Create a new instance of the SQLiteCache type
+		cache, err := NewSQLiteCache(sqliteFile.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cache
+	}
+}
+
+func TestRemoteSqlite(t *testing.T) {
+	ctx := context.TODO()
+	log.Printf("TestRemoteSqlite...")
+	testRemote(t, ctx, initSqliteCache(t))
+}
+
+func TestRemoteConcurrentSqlite(t *testing.T) {
+	ctx := context.TODO()
+	log.Printf("TestRemoteConcurrentSqlite...")
+	testRemoteConcurrent(t, ctx, initSqliteCache(t))
+
 }
