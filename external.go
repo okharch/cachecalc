@@ -122,13 +122,7 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 			unlockEntry() // close wait
 			return err
 		}
-		var ttc time.Duration
-		for _, d := range []time.Duration{entry.CalcDuration, r.CalcTime, time.Millisecond * 20} {
-			if d != 0 {
-				ttc = d
-				break
-			}
-		}
+		ttc := nzDuration(entry.CalcDuration, r.CalcTime, time.Millisecond*20)
 		time.Sleep(ttc)
 	}
 	entry.Lock()
