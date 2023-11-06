@@ -50,8 +50,21 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 		entry.wait = nil
 		entry.Unlock()
 	}
-	// this loop tries to obtain either the freshest value from external or lock to calculate its own version
 	externalLock := false
+	defer func() {
+		// release external lock on exit if it was obtained
+		if !externalLock {
+			return
+		}
+		// as we got external lock, we can calculate value locally, set it to external cache
+		if err = cc.externalCache.Del(ctx, lockKey); err != nil {
+			logger.Printf("thread %v, failed to remove lock %s: %s", thread, lockKey, err)
+		} else {
+			logger.Printf("thread %v, external lock %s removed", thread, lockKey)
+		}
+	}()
+	// this loop tries to obtain either the freshest value from external
+	// or lock to calculate its own version
 	ttl := nzDuration(r.MaxTTL)
 	for {
 		// check entrySerialized for key
@@ -118,15 +131,6 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 		}
 		time.Sleep(ttc)
 	}
-	// as we got external lock, we can calculate value locally, set it to external cache
-	defer func() {
-		// release external lock on exit if it was obtained
-		if err = cc.externalCache.Del(ctx, lockKey); err != nil {
-			logger.Printf("thread %v, failed to remove lock %s: %s", thread, lockKey, err)
-		} else {
-			logger.Printf("thread %v, external lock %s removed", thread, lockKey)
-		}
-	}()
 	entry.Lock()
 	logger.Printf("thread %v:%s calculating value: %s", thread, key, reason)
 	_ = cc.calculateValue(ctx, r, entry, pushValue) // ignore returned value, it is stored to entry
