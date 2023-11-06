@@ -9,7 +9,7 @@ import (
 
 func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (err error) {
 	key := fmt.Sprintf("%s", r.key)
-	lockKey := key + ".Lock"
+	lockKey := getKeyLock(key)
 	thread := getThread(ctx)
 	logger.Printf("thread %v obtain local entry %s", thread, key)
 	// try to obtain the value from local cache

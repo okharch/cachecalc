@@ -57,10 +57,15 @@ type CachedCalculations struct {
 	sync.WaitGroup
 }
 
+func getKeyLock(key string) string {
+	return key + ".lock"
+}
+
 var logger *log.Logger
 
 func init() {
 	logger = log.New(io.Discard, "", log.LstdFlags)
+	//logger = log.New(os.Stderr, "", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
 }
 
 // NewCachedCalculations is used to create app's instance of CachedCalculations.
