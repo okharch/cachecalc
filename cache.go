@@ -153,11 +153,12 @@ func GetCachedCalcX[T any](cc *CachedCalculations, ctx context.Context, key any,
 func (cc *CachedCalculations) Close() {
 	cc.Wait()
 	cc.Lock()
+	cc.workers.Wait()
 	defer cc.Unlock()
-	for k, v := range cc.entries {
-		wait := v.wait // CachedCalculations.Close()
+	for k, entry := range cc.entries {
+		wait := entry.wait // CachedCalculations.Close()
 		if wait != nil {
-			<-v.wait // CachedCalculations.Close()
+			<-wait // CachedCalculations.Close()
 		}
 		delete(cc.entries, k) // Close()
 	}
@@ -178,7 +179,7 @@ func (cc *CachedCalculations) obtainValue(ctx context.Context, r *request) (err 
 
 // simple case for single CachedCalculations instance.
 func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err error) {
-	entry := cc.obtainEntry(r)
+	entry := cc.obtainEntry(r) // entry is locked after call
 	thread := getThread(ctx)
 	wait := entry.wait // before starting calculation check whether someone else is not performing it already
 	if wait != nil {
@@ -189,18 +190,18 @@ func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err 
 			entry.Unlock()
 			logger.Printf("thread %v:%s,waiting while other thread calculating\n", thread, r.key)
 			<-wait // wait until it was closed
-			logger.Printf("thread %v:%s,waiting for other thread completed: %v\n", thread, r.key, getEntryValue(entry, r))
 			// read Lock is enough to return value
-			entry.RLock()
-			defer entry.RUnlock()
+			entry.Lock()
 		} else {
-			defer entry.Unlock()
 			logger.Printf("thread %v, key %s already being updated by someone else but value still not expired", thread, r.key)
 		}
 		cc.pushValue(ctx, entry, r)
-		return entry.Err
+		err = entry.Err
+		entry.Unlock()
+		return err
 	}
-	return cc.calculateValue(ctx, r, entry, true)
+	// entry is locked here
+	return cc.calculateValue(ctx, r, entry, true) // unlocks entry
 }
 
 // obtainEntry locks local cache and checks whether entry exist.
@@ -226,9 +227,10 @@ func (cc *CachedCalculations) pushValue(ctx context.Context, entry *CacheEntry, 
 		logger.Printf("thread %v, pushing error %s = %v to ready channel", thread, r.key, entry.Err)
 	} else {
 		// store value to the destination variable
-		r.ready <- deserialize(entry.Value, r.dest)
+		err := deserialize(entry.Value, r.dest)
 		v := reflect.ValueOf(r.dest).Elem()
 		logger.Printf("thread %v, pushing value %v of %s : %v to ready channel", thread, getEntryValue(entry, r), r.key, v)
+		r.ready <- err
 	}
 }
 
@@ -237,6 +239,7 @@ func getThread(ctx context.Context) any {
 	return v
 }
 
+// calculateValue expects entry to be locked with .Lock and will unlock it before exit
 func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, entry *CacheEntry, pushValue bool) (err error) {
 	reason := "entry expired"
 	thread := ctx.Value("thread")
@@ -249,8 +252,9 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 			cc.pushValue(ctx, entry, r)
 		}
 		if entry.Refresh.After(time.Now()) {
+			err = entry.Err
 			entry.Unlock()
-			return entry.Err
+			return err
 		}
 		reason = "entry refresh"
 	}
@@ -298,12 +302,12 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	entry.Refresh = now.Add(r.MinTTL)
 	entry.Expire = now.Add(r.MaxTTL)
 	logger.Printf("thread %v,entry %s refresh +%v:%v, expire +%v:%v\n", thread, r.key, r.MinTTL, now.Add(r.MinTTL), r.MaxTTL, now.Add(r.MaxTTL))
-	entry.Unlock()
-	logger.Printf("thread %v,entry %s %v was unlocked\n", thread, r.key, v)
 	if !hadValue {
 		cc.pushValue(ctx, entry, r)
 		logger.Printf("thread %v,entry %s value %v has been pushed to ready channel\n", thread, r.key, v)
 	}
+	entry.Unlock()
+	logger.Printf("thread %v,entry %s %v was unlocked\n", thread, r.key, v)
 	return
 }
 

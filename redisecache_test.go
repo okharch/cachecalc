@@ -20,11 +20,12 @@ func TestRedisExtCache(t *testing.T) {
 	}
 	require.NotNil(t, ecache)
 	var wg sync.WaitGroup
+	//var mu sync.Mutex
 	test := func() {
 		defer wg.Done()
 		// try to get some random key with the same value
 		keyb := make([]byte, 8)
-		_, err = rand.Read(keyb)
+		_, err := rand.Read(keyb)
 		require.NoError(t, err)
 		val := make([]byte, 128)
 		_, err = rand.Read(val)

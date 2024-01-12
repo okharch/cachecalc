@@ -13,7 +13,7 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	thread := getThread(ctx)
 	logger.Printf("thread %v obtain local entry %s", thread, key)
 	// try to obtain the value from local cache
-	entry := cc.obtainEntry(r)
+	entry := cc.obtainEntry(r) // this will lock entry
 	// there should be the only thread that communicates with external/calculates value from the single cc instance
 	// activeThread flag marks current thread as the one
 	pushValue := true
@@ -30,18 +30,21 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 		pushValue = false
 	}
 	// if thread is not the one that calculates value or is obtaining it from external cache it should wait for the result
-	if entry.wait != nil {
-		entry.Unlock()
+	wait := entry.wait
+	if wait != nil {
 		if !pushValue {
 			logger.Printf("thread %v, %s - leaving with cached entry %v", thread, key, getEntryValue(entry, r))
+			entry.Unlock()
 			return err
 		}
 		logger.Printf("thread %v, %s - waiting entry to be calculated", thread, key)
-		<-entry.wait
+		entry.Unlock()
+		<-wait
 		entry.RLock()
-		defer entry.RUnlock()
 		cc.pushValue(ctx, entry, r)
-		return entry.Err
+		err = entry.Err
+		entry.RUnlock()
+		return err
 	}
 	entry.wait = make(chan struct{}) // make all other threads wait
 	entry.Unlock()
@@ -78,12 +81,13 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 			entry.Lock()
 			err = deserializeEntry(entrySerialized, entry)
 			if err != nil {
-				unlockEntry()
+				unlockEntry() // deserializeEntry, will close wait
 				return fmt.Errorf("thread %v: %s failed to obtain entrySerialized from external cache: %w", thread, key, err)
 			}
 			if entry.Err != nil {
-				unlockEntry()
-				return entry.Err
+				err = entry.Err
+				unlockEntry() // deserializeEntry, entry.Err != nil, will close wait
+				return err
 			}
 			logger.Printf("thread %v: broadcast %s external value: %v", thread, key, pushValue)
 			// broadcast obtained value
@@ -92,19 +96,20 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 				pushValue = false // no more need to push value, do it only once
 			}
 			if entry.Refresh.After(time.Now()) {
-				unlockEntry()
 				logger.Printf("thread %v no need to refresh %s (%v), exiting", thread, r.key, time.Since(entry.Refresh))
-				return entry.Err
+				err := entry.Err
+				unlockEntry()
+				return err
 			}
 			// continue only if needed to refresh value
 			close(entry.wait)                // release other threads, they would use value obtained from external cache
 			entry.wait = make(chan struct{}) // and this thread will recalculate new value
 			logger.Printf("thread %v will be refreshing value %s", thread, r.key)
 			entry.Unlock()
-		}
+		} // leaves with entry.Unlock()
 		if externalLock {
 			logger.Printf("thread %v got external lock %s", thread, r.key)
-			break
+			break // to calculate value after external lock is obtained
 		}
 		logger.Printf("thread %v: trying to set external lock %s", thread, lockKey)
 		externalLock, err = cc.externalCache.SetNX(ctx, lockKey, []byte(fmt.Sprint(thread)), ttl)
@@ -125,12 +130,12 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 		ttc := nzDuration(entry.CalcDuration, r.CalcTime, time.Millisecond*20)
 		time.Sleep(ttc)
 	}
-	entry.Lock()
 	logger.Printf("thread %v:%s calculating value: %s", thread, key, reason)
-	_ = cc.calculateValue(ctx, r, entry, pushValue) // ignore returned value, it is stored to entry
+	entry.Lock()                                    // this will be unlocked by calculateValue
+	_ = cc.calculateValue(ctx, r, entry, pushValue) // ignore returned value, it is stored to entry, also makes entry.Unlock()
 	// serialize and set external cache to the latest value
-	entry.RLock()
-	defer entry.RUnlock()
+	entry.Lock()
+	defer entry.Unlock()
 	se, err := serializeEntry(entry)
 	if err != nil {
 		return err
@@ -139,13 +144,15 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	if err != nil {
 		return err
 	}
-	logger.Printf("thread %v:%s SET external cache to %v, expires in %dms", thread, r.key, getEntryValue(entry, r), ttl.Milliseconds())
-	return entry.Err
+	//logger.Printf("thread %v:%s SET external cache to %v, expires in %dms", thread, r.key, getEntryValue(entry, r), ttl.Milliseconds())
+	err = entry.Err
+	return err
 }
 
 func getEntryValue(entry *CacheEntry, r *request) any {
 	//entry.RLock()
 	//defer entry.RUnlock()
 	deserialize(entry.Value, r.dest)
-	return reflect.ValueOf(r.dest).Elem()
+	v := reflect.ValueOf(r.dest).Elem()
+	return v
 }
