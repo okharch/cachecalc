@@ -59,5 +59,6 @@ and single Golang server will handle your request much faster than in Kubernetes
 Don't use a sledgehammer to crack a nut!
 
 ## TODO
-Make TTL returned by calculation. It might know better when returned value expires. For example ttl for token returned by calculation.
+- Make TTL returned by calculation. It might know better when returned value expires. For example ttl for token returned by calculation.
+- Provide a way to expire cache entry by goroutine. It might be useful for the case when the data is changed in the database.
 

@@ -11,7 +11,8 @@ import (
 
 type CachedCalcOpts struct {
 	MaxTTL, MinTTL time.Duration
-	CalcTime       time.Duration // the duration of last calculation
+	CalcTime       time.Duration                                                             // the duration of last calculation
+	ExpireEntry    func(ctx context.Context, e *CacheEntry, expireEntry func(e *CacheEntry)) // goroutine to expire entry, nil for none, should live on ctx expiration, should call expireEntry to expire Entry
 }
 
 // CalculateValue this is type of function which returns interface{} type
@@ -85,7 +86,7 @@ func NewCachedCalculations(maxWorkers int, externalCache ExternalCache) *CachedC
 // it is created with default for no external cache, but that can be redefined by app
 func GetCachedCalcOpt[T any](ctx context.Context, key any,
 	calculateValueAndOpt func(ctx context.Context) (T, CachedCalcOpts, error), limitWorkers bool) (T, error) {
-	return GetCachedCalcOptX(DefaultCCs, ctx, key, calculateValueAndOpt, limitWorkers)
+	return GetCachedCalcOptX(DefaultCCs, ctx, key, calculateValueAndOpt, limitWorkers) // GetCachedCalcOpt() uses DefaultCCs for cc parameter
 }
 
 func GetCachedCalcOptX[T any](cc *CachedCalculations, ctx context.Context, key any,
@@ -144,7 +145,7 @@ func GetCachedCalcX[T any](cc *CachedCalculations, ctx context.Context, key any,
 		opt := CachedCalcOpts{MaxTTL: maxTTL, MinTTL: minTTL, CalcTime: time.Since(started)}
 		return result, opt, err
 	}
-	return GetCachedCalcOptX(cc, ctx, key, calcValue, limitWorker)
+	return GetCachedCalcOptX(cc, ctx, key, calcValue, limitWorker) // GetCachedCalcX() which provides calculateValue func(ctx context.Context) (T, error) without options
 }
 
 // Close is automatically called on expired context. It is safe to call it multiple times
@@ -195,7 +196,7 @@ func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err 
 		} else {
 			logger.Printf("thread %v, key %s already being updated by someone else but value still not expired", thread, r.key)
 		}
-		cc.pushValue(ctx, entry, r)
+		cc.pushValue(ctx, entry, r) // obtainLocal() pushes value to cache when it is ready or not expired
 		err = entry.Err
 		entry.Unlock()
 		return err
@@ -220,6 +221,8 @@ func (cc *CachedCalculations) obtainEntry(r *request) *CacheEntry {
 	return entry
 }
 
+// pushValue pushes the error if calculation returned error to the ready channel of request r,
+// otherwise it deserializes the value and pushes the result of deserialization to the ready channel
 func (cc *CachedCalculations) pushValue(ctx context.Context, entry *CacheEntry, r *request) {
 	thread := getThread(ctx)
 	if entry.Err != nil {
@@ -234,6 +237,7 @@ func (cc *CachedCalculations) pushValue(ctx context.Context, entry *CacheEntry, 
 	}
 }
 
+// getThread returns the thread id from the context, this is a utility for debugging
 func getThread(ctx context.Context) any {
 	v := ctx.Value("thread")
 	return v
@@ -249,7 +253,7 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	}
 	if hadValue {
 		if pushValue {
-			cc.pushValue(ctx, entry, r)
+			cc.pushValue(ctx, entry, r) // calculateValue() replaces value to cache if it is not expired, checks whether need to be refreshed below
 		}
 		if entry.Refresh.After(time.Now()) {
 			err = entry.Err
@@ -295,15 +299,16 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	}
 	entry.Err = err
 	entry.CalcDuration = calcDuration
-	close(entry.wait) // broadcast result of local calculation to clients
-	entry.wait = nil  // calculations complete
+	w := entry.wait
+	entry.wait = nil // calculations complete
+	close(w)         // broadcast result of local calculation to clients
 	logger.Printf("thread %v,entry %s broadcast value %v is ready, setting cache entry\n", thread, r.key, v)
 	// update refresh and expire
 	entry.Refresh = now.Add(r.MinTTL)
 	entry.Expire = now.Add(r.MaxTTL)
 	logger.Printf("thread %v,entry %s refresh +%v:%v, expire +%v:%v\n", thread, r.key, r.MinTTL, now.Add(r.MinTTL), r.MaxTTL, now.Add(r.MaxTTL))
 	if !hadValue {
-		cc.pushValue(ctx, entry, r)
+		cc.pushValue(ctx, entry, r) // calculateValue() pushes the completely new value to cache
 		logger.Printf("thread %v,entry %s value %v has been pushed to ready channel\n", thread, r.key, v)
 	}
 	entry.Unlock()

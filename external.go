@@ -20,7 +20,7 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	reason := "no value found"
 	err = entry.Err
 	if entryNonEmpty(entry) {
-		cc.pushValue(ctx, entry, r)
+		cc.pushValue(ctx, entry, r) // obtainExternal(): re-push non empty value as ready
 		if entry.Refresh.After(time.Now()) {
 			logger.Printf("thread %v:%s leaving no need to refresh for %v", thread, key, entry.Refresh.Sub(time.Now()))
 			entry.Unlock()
@@ -41,7 +41,7 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 		entry.Unlock()
 		<-wait
 		entry.RLock()
-		cc.pushValue(ctx, entry, r)
+		cc.pushValue(ctx, entry, r) // obtainExternal(): re-push value as soon as some other thread / remote calculated it
 		err = entry.Err
 		entry.RUnlock()
 		return err
@@ -92,8 +92,8 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 			logger.Printf("thread %v: broadcast %s external value: %v", thread, key, pushValue)
 			// broadcast obtained value
 			if pushValue {
-				cc.pushValue(ctx, entry, r)
-				pushValue = false // no more need to push value, do it only once
+				cc.pushValue(ctx, entry, r) // obtainExternal(): push value obtained from external cache
+				pushValue = false           // no more need to push value, do it only once
 			}
 			if entry.Refresh.After(time.Now()) {
 				logger.Printf("thread %v no need to refresh %s (%v), exiting", thread, r.key, time.Since(entry.Refresh))
