@@ -11,8 +11,10 @@ import (
 
 type CachedCalcOpts struct {
 	MaxTTL, MinTTL time.Duration
-	CalcTime       time.Duration                                                             // the duration of last calculation
-	ExpireEntry    func(ctx context.Context, e *CacheEntry, expireEntry func(e *CacheEntry)) // goroutine to expire entry, nil for none, should live on ctx expiration, should call expireEntry to expire Entry
+	CalcTime       time.Duration // the duration of last calculation
+	// ExpireEntry is a func which returns true if entry needs to be expired
+	// it should also watch for ctx.Done() and return false in that case
+	ExpireEntry func(ctx context.Context) bool
 }
 
 // CalculateValue this is type of function which returns interface{} type
@@ -26,7 +28,6 @@ type (
 var DefaultCCs = NewCachedCalculations(4, nil)
 
 type request struct {
-	ctx            context.Context
 	calculateValue CalculateValueAndOpt
 	key            any
 	ready          chan error // error message, empty if no error
@@ -43,7 +44,9 @@ type CacheEntry struct {
 	Value        []byte        // stores the serialized value of last calculations
 	// wait is channel which, if not nil, signals about ongoing calculation on the item.
 	// It is closed by issuer to inform interested clients on end of calculations
-	wait chan struct{}
+	wait   chan struct{}
+	ctx    context.Context
+	cancel context.CancelFunc
 	sync.WaitGroup
 	sync.RWMutex
 }
@@ -52,7 +55,8 @@ type CacheEntry struct {
 type CachedCalculations struct {
 	entries       map[any]*CacheEntry
 	externalCache ExternalCache
-	workers       sync.WaitGroup
+	workers       sync.WaitGroup // housekeeping of goroutines which calculate values for specific keys
+	expire        sync.WaitGroup
 	limitWorkers  chan struct{}
 	sync.Mutex
 	sync.WaitGroup
@@ -66,7 +70,6 @@ var logger *log.Logger
 
 func init() {
 	logger = log.New(io.Discard, "", log.LstdFlags)
-	//logger = log.New(os.Stderr, "", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
 }
 
 // NewCachedCalculations is used to create app's instance of CachedCalculations.
@@ -103,9 +106,8 @@ func GetCachedCalcOptX[T any](cc *CachedCalculations, ctx context.Context, key a
 	cc.Add(2)
 	cc.Unlock()
 	go func() {
-		cc.handleRequest(&request{
+		cc.handleRequest(ctx, &request{
 			calculateValue: calcValue,
-			ctx:            ctx,
 			key:            key,
 			dest:           &result,
 			ready:          ready,
@@ -115,7 +117,7 @@ func GetCachedCalcOptX[T any](cc *CachedCalculations, ctx context.Context, key a
 		cc.Done()
 		cc.Unlock()
 	}()
-	// then wait for the result to be wait
+	// then wait for the result
 	err = <-ready
 	cc.Lock()
 	cc.Done()
@@ -161,7 +163,8 @@ func (cc *CachedCalculations) Close() {
 		if wait != nil {
 			<-wait // CachedCalculations.Close()
 		}
-		delete(cc.entries, k) // Close()
+		entry.cancel()        // cancel context to avoid context leak and shutdown expiration goroutine
+		delete(cc.entries, k) // Close(), cancel+
 	}
 	if cc.externalCache != nil {
 		cc.externalCache.Close()
@@ -180,7 +183,7 @@ func (cc *CachedCalculations) obtainValue(ctx context.Context, r *request) (err 
 
 // simple case for single CachedCalculations instance.
 func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err error) {
-	entry := cc.obtainEntry(r) // entry is locked after call
+	entry := cc.obtainEntry(ctx, r) // entry is locked after call
 	thread := getThread(ctx)
 	wait := entry.wait // before starting calculation check whether someone else is not performing it already
 	if wait != nil {
@@ -196,7 +199,7 @@ func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err 
 		} else {
 			logger.Printf("thread %v, key %s already being updated by someone else but value still not expired", thread, r.key)
 		}
-		cc.pushValue(ctx, entry, r) // obtainLocal() pushes value to cache when it is ready or not expired
+		cc.pushValue(entry, r, false) // obtainLocal() pushes value to cache when it is ready or not expired
 		err = entry.Err
 		entry.Unlock()
 		return err
@@ -208,13 +211,15 @@ func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err 
 // obtainEntry locks local cache and checks whether entry exist.
 // if it is not it adds new entry to the local cache
 // it locks the returned entry so the caller must release it
-func (cc *CachedCalculations) obtainEntry(r *request) *CacheEntry {
+func (cc *CachedCalculations) obtainEntry(ctx context.Context, r *request) *CacheEntry {
 	cc.Lock()
 	defer cc.Unlock()
 	entry, exists := cc.entries[r.key]
 	if !exists {
 		// create new entry for internal memory as entry does not exist
 		entry = &CacheEntry{}
+		// set context for entry
+		entry.ctx, entry.cancel = context.WithCancel(ctx)
 		cc.entries[r.key] = entry
 	}
 	entry.Lock()
@@ -223,7 +228,8 @@ func (cc *CachedCalculations) obtainEntry(r *request) *CacheEntry {
 
 // pushValue pushes the error if calculation returned error to the ready channel of request r,
 // otherwise it deserializes the value and pushes the result of deserialization to the ready channel
-func (cc *CachedCalculations) pushValue(ctx context.Context, entry *CacheEntry, r *request) {
+func (cc *CachedCalculations) pushValue(entry *CacheEntry, r *request, startExpiration bool) {
+	ctx := entry.ctx
 	thread := getThread(ctx)
 	if entry.Err != nil {
 		r.ready <- entry.Err
@@ -234,7 +240,27 @@ func (cc *CachedCalculations) pushValue(ctx context.Context, entry *CacheEntry, 
 		v := reflect.ValueOf(r.dest).Elem()
 		logger.Printf("thread %v, pushing value %v of %s : %v to ready channel", thread, getEntryValue(entry, r), r.key, v)
 		r.ready <- err
+		if startExpiration && r.ExpireEntry != nil {
+			// run goroutine to expire entry
+			go func() {
+				logger.Printf("thread %v, starting expiration goroutine for entry %s\n", thread, r.key)
+				if r.ExpireEntry(ctx) {
+					cc.removeEntry(r.key)
+				}
+			}()
+		}
 	}
+}
+
+func (cc *CachedCalculations) removeEntry(key any) {
+	cc.Lock()
+	defer cc.Unlock()
+	entry, ok := cc.entries[key]
+	if !ok {
+		return
+	}
+	entry.cancel()          // cancel context to avoid context leak
+	delete(cc.entries, key) // remove entry from cache upon expiration : pushValue(), cancel+
 }
 
 // getThread returns the thread id from the context, this is a utility for debugging
@@ -253,7 +279,7 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	}
 	if hadValue {
 		if pushValue {
-			cc.pushValue(ctx, entry, r) // calculateValue() replaces value to cache if it is not expired, checks whether need to be refreshed below
+			cc.pushValue(entry, r, false) // calculateValue() replaces value to cache if it is not expired, checks whether need to be refreshed below
 		}
 		if entry.Refresh.After(time.Now()) {
 			err = entry.Err
@@ -269,7 +295,7 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	entry.Unlock() // it was locked before calculateValue
 	logger.Printf("thread %v,lock was released for entry %s\n", thread, r.key)
 	if r.limitWorkers {
-		// add new worker
+		// push new worker
 		logger.Printf("thread %v, entry %s, taking worker...\n", thread, r.key)
 		cc.limitWorkers <- struct{}{}
 	}
@@ -308,7 +334,7 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	entry.Expire = now.Add(r.MaxTTL)
 	logger.Printf("thread %v,entry %s refresh +%v:%v, expire +%v:%v\n", thread, r.key, r.MinTTL, now.Add(r.MinTTL), r.MaxTTL, now.Add(r.MaxTTL))
 	if !hadValue {
-		cc.pushValue(ctx, entry, r) // calculateValue() pushes the completely new value to cache
+		cc.pushValue(entry, r, true) // calculateValue() pushes the completely new value to cache
 		logger.Printf("thread %v,entry %s value %v has been pushed to ready channel\n", thread, r.key, v)
 	}
 	entry.Unlock()
@@ -316,10 +342,10 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	return
 }
 
-func (cc *CachedCalculations) handleRequest(r *request) {
+func (cc *CachedCalculations) handleRequest(ctx context.Context, r *request) {
 	obtain := func() {
 		defer cc.workers.Done()
-		if err := cc.obtainValue(r.ctx, r); err != nil {
+		if err := cc.obtainValue(ctx, r); err != nil {
 			logger.Printf("failed to obtain value: %s", err)
 		}
 	}
@@ -345,7 +371,8 @@ func (cc *CachedCalculations) RemoveEntries(filter func(key any, entry *CacheEnt
 		e.Lock()
 		if filter(k, e) {
 			logger.Printf("remove entry %s from cache upon expiration", k)
-			delete(cc.entries, k) // remove entry from cache upon expiration : RemoveEntries()
+			e.cancel()            // cancel context to avoid context leak and shutdown expiration goroutine
+			delete(cc.entries, k) // remove entry from cache upon expiration : RemoveEntries(), cancel+
 		}
 		e.Unlock()
 	}

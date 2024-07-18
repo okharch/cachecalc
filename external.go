@@ -13,14 +13,14 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	thread := getThread(ctx)
 	logger.Printf("thread %v obtain local entry %s", thread, key)
 	// try to obtain the value from local cache
-	entry := cc.obtainEntry(r) // this will lock entry
+	entry := cc.obtainEntry(ctx, r) // this will lock entry
 	// there should be the only thread that communicates with external/calculates value from the single cc instance
 	// activeThread flag marks current thread as the one
 	pushValue := true
 	reason := "no value found"
 	err = entry.Err
 	if entryNonEmpty(entry) {
-		cc.pushValue(ctx, entry, r) // obtainExternal(): re-push non empty value as ready
+		cc.pushValue(entry, r, false) // obtainExternal(): re-push non empty value as ready
 		if entry.Refresh.After(time.Now()) {
 			logger.Printf("thread %v:%s leaving no need to refresh for %v", thread, key, entry.Refresh.Sub(time.Now()))
 			entry.Unlock()
@@ -41,7 +41,7 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 		entry.Unlock()
 		<-wait
 		entry.RLock()
-		cc.pushValue(ctx, entry, r) // obtainExternal(): re-push value as soon as some other thread / remote calculated it
+		cc.pushValue(entry, r, false) // obtainExternal(): re-push value as soon as some other thread / remote calculated it
 		err = entry.Err
 		entry.RUnlock()
 		return err
@@ -59,8 +59,8 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 		if !externalLock {
 			return
 		}
-		// as we got external lock, we can calculate value locally, set it to external cache
-		if err = cc.externalCache.Del(ctx, lockKey); err != nil {
+		// remove external lock with fresh context as we might be exiting with expired context
+		if err = cc.externalCache.Del(context.TODO(), lockKey); err != nil {
 			logger.Printf("thread %v, failed to remove lock %s: %s", thread, lockKey, err)
 		} else {
 			logger.Printf("thread %v, external lock %s removed", thread, lockKey)
@@ -70,6 +70,11 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	// or lock to calculate its own version
 	ttl := nzDuration(r.MaxTTL)
 	for {
+		// check for context cancellation
+		if err = ctx.Err(); err != nil {
+			unlockEntry()
+			return err
+		}
 		// check entrySerialized for key
 		logger.Printf("thread %v:%s getting external value", thread, key)
 		entrySerialized, externalExists, err := cc.externalCache.Get(ctx, key)
@@ -92,8 +97,8 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 			logger.Printf("thread %v: broadcast %s external value: %v", thread, key, pushValue)
 			// broadcast obtained value
 			if pushValue {
-				cc.pushValue(ctx, entry, r) // obtainExternal(): push value obtained from external cache
-				pushValue = false           // no more need to push value, do it only once
+				cc.pushValue(entry, r, false) // obtainExternal(): push value obtained from external cache
+				pushValue = false             // no more need to push value, do it only once
 			}
 			if entry.Refresh.After(time.Now()) {
 				logger.Printf("thread %v no need to refresh %s (%v), exiting", thread, r.key, time.Since(entry.Refresh))

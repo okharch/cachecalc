@@ -4,12 +4,18 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"log"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func init() {
+	logger = log.New(os.Stderr, "", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
+}
 
 const tick = time.Millisecond * 20
 const refresh = tick * 3
@@ -115,6 +121,63 @@ func TestLocal(t *testing.T) {
 	require.Equal(t, 2, d3)
 	wg.Wait()
 	cc.Close()
+}
+
+func TestLocalExpire(t *testing.T) {
+	returnValue := 0
+	var mu sync.Mutex
+	eeDone := false
+	expireCh := make(chan struct{})
+	entryExpired := make(chan struct{}, 1) // make it buffered to avoid waiting for the first expire
+	expireEntry := func(ctx context.Context) bool {
+		logger.Println("expireEntry: checking if entry should be expired")
+		select {
+		case <-ctx.Done():
+			logger.Println("expireEntry: context done")
+			eeDone = true
+			entryExpired <- struct{}{}
+			return false
+		case <-expireCh:
+			logger.Println("expireEntry: entry expired")
+			entryExpired <- struct{}{}
+		}
+		return true
+	}
+	calc := func(ctx context.Context) (int, CachedCalcOpts, error) {
+		mu.Lock()
+		returnValue++
+		mu.Unlock()
+		logger.Println("calc will return ", returnValue)
+		return returnValue, CachedCalcOpts{
+			MaxTTL:      time.Hour,
+			MinTTL:      time.Hour,
+			ExpireEntry: expireEntry,
+		}, nil
+	}
+	key := getRandomKey(t)
+	ctx, cancel := context.WithCancel(context.WithValue(context.TODO(), "thread", 1))
+	v, err := GetCachedCalcOpt(ctx, key, calc, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, v)
+	v, err = GetCachedCalcOpt(ctx, key, calc, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, v)
+	logger.Println("send expiration signal")
+	expireCh <- struct{}{}
+	logger.Println("waiting for entry to be expired")
+	<-entryExpired
+	logger.Println("entry expired, should be recalculated")
+	v, err = GetCachedCalcOpt(ctx, key, calc, true)
+	require.NoError(t, err)
+	require.Equal(t, 2, v)
+	require.False(t, eeDone)
+	logger.Println("now testing cancellation")
+	v, err = GetCachedCalcOpt(ctx, key, calc, true)
+	require.NoError(t, err)
+	require.Equal(t, 2, v)
+	cancel()
+	<-entryExpired
+	require.True(t, eeDone, "context cancelled, eeDone should be true")
 }
 
 func TestSimpleCalc(t *testing.T) {
