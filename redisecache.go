@@ -65,6 +65,7 @@ func (r *RedisExternalCache) Del(ctx context.Context, key string) error {
 // NewRedisCache creates an instance of ExternalCache which is connected to ENV{REDIS_URL} or local redis server if not specified.
 func NewRedisCache(ctx context.Context) (ExternalCache, error) {
 	client, err := GetRedis(ctx)
+	// Enable keyspace notifications
 	if err != nil {
 		return nil, err
 	}
@@ -74,4 +75,48 @@ func NewRedisCache(ctx context.Context) (ExternalCache, error) {
 
 func (r *RedisExternalCache) Close() error {
 	return r.client.Close()
+}
+
+func (r *RedisExternalCache) ExpireEntries(ctx context.Context) chan string {
+	// Set configuration for both deletion and expiration events
+	err := r.client.ConfigSet(ctx, "notify-keyspace-events", "gE").Err()
+	if err != nil {
+		logger.Printf("failed to set notify-keyspace-events: %s", err)
+		return nil
+	}
+
+	thread := getThread(ctx)
+	pubSub := r.client.PSubscribe(ctx, "__keyevent@0__:del")
+	logger.Printf("Thread %v:ExpireEntries subscribed to __keyevent@0__:del", thread)
+	msgCh := pubSub.Channel()
+	ch := make(chan string)
+
+	go func() {
+		defer close(ch)
+		defer func() {
+			_ = pubSub.Close()
+			logger.Printf("Thread %v:ExpireEntries unsubscribed", thread)
+		}()
+
+		for {
+			select {
+			case msg, ok := <-msgCh:
+				if !ok {
+					return
+				}
+				logger.Printf("Thread %v: redis: msg %s channel %s", thread, msg.Payload, msg.Channel)
+				key := msg.Payload
+				logger.Printf("Thread %v:ExpireEntries received key %s", thread, key)
+				ch <- key
+			case <-ctx.Done():
+				logger.Printf("Thread %v:ExpireEntries context done", thread)
+				return
+			}
+		}
+	}()
+
+	// Ensure subscription is established
+	//time.Sleep(time.Millisecond * 20)
+
+	return ch
 }

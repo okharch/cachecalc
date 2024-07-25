@@ -95,3 +95,39 @@ func TestRemoteConcurrentRedis(t *testing.T) {
 	ctx := context.TODO()
 	testRemoteConcurrent(t, ctx, initRedisCache(t))
 }
+
+func TestExpirationRedis(t *testing.T) {
+	log.Println("TestExpirationRedis...")
+	// init redis external cache
+	f := initRedisCache(t)
+	ctxCancel, cancel := context.WithCancel(context.TODO())
+	ctx := context.WithValue(ctxCancel, "thread", 1)
+	cc := f(ctx)
+	defer func() {
+		_ = cc.Close()
+	}()
+	// set some key with some value
+	key := getRandomKey(t)
+	val := []byte("test")
+	// wait for delete key message
+	exp := cc.ExpireEntries(ctx)
+	// now let's set key with long expiration and try to apply Del method to check whether that channel will trigger the message
+	key = getRandomKey(t)
+	err := cc.Set(ctx, key, val, tick*1000)
+	require.NoError(t, err)
+	// delete the key
+	logger.Println("deleting key", key)
+	require.NoError(t, cc.Del(ctx, key))
+	logger.Println("wait for deletion message", key)
+	select {
+	case k := <-exp:
+		require.Equal(t, key, k)
+		logger.Println("key deletion notification received", key)
+	case <-time.After(time.Second * 10):
+		cancel()
+		t.Log("key deletion notification not received")
+	}
+	cancel()
+	// wait until channel is closed on context cancel
+	<-exp
+}
