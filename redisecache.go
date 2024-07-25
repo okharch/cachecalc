@@ -79,6 +79,9 @@ func (r *RedisExternalCache) Close() error {
 
 func (r *RedisExternalCache) ExpireEntries(ctx context.Context) chan string {
 	// Set configuration for both deletion and expiration events
+	// https://redis.io/docs/latest/develop/use/keyspace-notifications/
+	// g     Generic commands (non-type specific) like DEL, EXPIRE, RENAME, ...
+	// E     Keyevent events, published with __keyevent@<db>__ prefix.
 	err := r.client.ConfigSet(ctx, "notify-keyspace-events", "gE").Err()
 	if err != nil {
 		logger.Printf("failed to set notify-keyspace-events: %s", err)
