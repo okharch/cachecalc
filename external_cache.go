@@ -26,4 +26,6 @@ type ExternalCache interface {
 	// Del Removes the specified key. A key is ignored if it does not exist.
 	Del(ctx context.Context, key string) error
 	Close() error // closes the connection
+	// ExpireEntries returns a channel of keys that have been deleted.
+	ExpireEntries(ctx context.Context) chan string
 }

@@ -4,10 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/lib/pq"
 	_ "github.com/lib/pq" // Import the pq driver
 	"strings"
 	"time"
 )
+
+type PostgresCache struct {
+	db  *sql.DB
+	dsn string
+}
 
 const (
 	createTableQuery = `CREATE TABLE IF NOT EXISTS postgres_cache_key_value_expired_v_1_4(
@@ -15,18 +21,32 @@ const (
     value bytea NOT NULL,
     expires_at TIMESTAMP)
 		`
-	deleteExpiredQuery = `delete from postgres_cache_key_value_expired_v_1_4 where expires_at <= now()`
+	deleteExpiredQuery = `DELETE FROM postgres_cache_key_value_expired_v_1_4 WHERE expires_at <= now() RETURNING key`
 
 	upsertValueQuery = `INSERT INTO postgres_cache_key_value_expired_v_1_4(key, value, expires_at) VALUES($1, $2, $3)
 		ON CONFLICT (key) DO UPDATE SET value = $2, expires_at = $3`
 	insertIfNotExistQuery = `INSERT INTO postgres_cache_key_value_expired_v_1_4(key, value, expires_at) VALUES($1, $2, $3)`
-	getValueQuery         = `SELECT value FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1 and expires_at>now()`
+	getValueQuery         = `SELECT value FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1 and expires_at > now()`
 	deleteKeyQuery        = `DELETE FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1`
-)
 
-type PostgresCache struct {
-	db *sql.DB
-}
+	dropTriggerQuery  = `DROP TRIGGER IF EXISTS cache_entry_deleted_trigger ON postgres_cache_key_value_expired_v_1_4`
+	dropFunctionQuery = `DROP FUNCTION IF EXISTS notify_cache_entry_deleted`
+
+	createTriggerFunctionQuery = `
+	CREATE OR REPLACE FUNCTION notify_cache_entry_deleted() RETURNS trigger AS $$
+	BEGIN
+		PERFORM pg_notify('cache_entry_deleted', OLD.key);
+		RETURN OLD;
+	END;
+	$$ LANGUAGE plpgsql;
+	`
+
+	createDeleteTriggerQuery = `
+	CREATE TRIGGER cache_entry_deleted_trigger
+	AFTER DELETE ON postgres_cache_key_value_expired_v_1_4
+	FOR EACH ROW EXECUTE FUNCTION notify_cache_entry_deleted();
+	`
+)
 
 func NewPostgresCache(ctx context.Context, dbUrl string) (ExternalCache, error) {
 	db, err := sql.Open("postgres", dbUrl)
@@ -43,9 +63,34 @@ func NewPostgresCache(ctx context.Context, dbUrl string) (ExternalCache, error) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cachecalc table: %w", err)
 	}
+
+	// drop existing trigger and function if they exist
+	_, err = db.ExecContext(ctx, dropTriggerQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to drop existing trigger: %w", err)
+	}
+
+	_, err = db.ExecContext(ctx, dropFunctionQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to drop existing function: %w", err)
+	}
+
+	// create trigger function
+	_, err = db.ExecContext(ctx, createTriggerFunctionQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create trigger function: %w", err)
+	}
+
+	// create delete trigger
+	_, err = db.ExecContext(ctx, createDeleteTriggerQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create delete trigger: %w", err)
+	}
+
 	p := &PostgresCache{
 		db: db,
 	}
+
 	if err = p.purgeExpired(ctx); err != nil {
 		return nil, err
 	}
@@ -120,4 +165,36 @@ func (p *PostgresCache) Close() error {
 		return err
 	}
 	return p.db.Close()
+}
+
+func (p *PostgresCache) ExpireEntries(ctx context.Context) chan string {
+	ch := make(chan string)
+
+	go func() {
+		defer close(ch)
+
+		// Listen for notifications
+		listener := pq.NewListener(p.dsn, 10*time.Second, time.Minute, nil)
+		err := listener.Listen("cache_entry_deleted")
+		if err != nil {
+			logger.Printf("Error setting up listener: %v", err)
+			return
+		}
+		defer listener.Close()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case notification := <-listener.Notify:
+				if notification != nil {
+					ch <- notification.Extra
+				}
+			case <-time.After(90 * time.Second):
+				go listener.Ping()
+			}
+		}
+	}()
+
+	return ch
 }

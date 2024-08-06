@@ -11,8 +11,8 @@ import (
 func init2Caches(t *testing.T, ctx context.Context, initExternalCache func(ctx context.Context) ExternalCache) (sc1, sc2 *CachedCalculations) {
 	logger.Println("init 2(two) cached calculations")
 	ec1 := initExternalCache(ctx)
-	sc1 = NewCachedCalculations(3, ec1)
-	sc2 = NewCachedCalculations(3, initExternalCache(ctx))
+	sc1 = NewCachedCalculations(ctx, ec1, 3)
+	sc2 = NewCachedCalculations(ctx, initExternalCache(ctx), 3)
 	require.NotNil(t, sc1)
 	require.NotNil(t, sc2)
 	return
@@ -143,8 +143,8 @@ func testRemoteConcurrent(t *testing.T, ctx context.Context, initExternalCache f
 
 func testExternalCache(t *testing.T, ctx context.Context, initExternalCache func(ctx context.Context) ExternalCache) {
 	cc1, cc2 := init2Caches(t, ctx, initExternalCache)
-	defer cc1.Close()
-	defer cc2.Close()
+	//defer cc1.Close()
+	//defer cc2.Close()
 	var entry CacheEntry
 	var err error
 	v, err := serialize(1)
@@ -153,9 +153,11 @@ func testExternalCache(t *testing.T, ctx context.Context, initExternalCache func
 	entry.Value = v
 	key := getRandomKey(t)
 	lockKey := getKeyLock(key)
+	logger.Println("cc1.SetNX", lockKey)
 	created, err := cc1.externalCache.SetNX(ctx, lockKey, v, expire)
 	require.NoError(t, err)
 	require.True(t, created)
+	logger.Println("cc2.SetNX", lockKey)
 	created, err = cc2.externalCache.SetNX(ctx, lockKey, v, expire)
 	require.NoError(t, err)
 	require.False(t, created)
@@ -163,18 +165,22 @@ func testExternalCache(t *testing.T, ctx context.Context, initExternalCache func
 	require.NoError(t, err)
 	require.NotNil(t, se)
 	require.NotZero(t, len(se))
+	logger.Println("cc1.Set", key)
 	err = cc1.externalCache.Set(ctx, key, se, expire)
 	require.NoError(t, err)
+	logger.Println("cc2.Get", key)
 	val, exists, err := cc2.externalCache.Get(ctx, key)
 	require.NoError(t, err)
 	require.True(t, exists)
 	require.NotZero(t, len(val))
 	require.Equal(t, se, val)
-	time.Sleep(expire + tick)
+	time.Sleep(expire + tick*10)
+	logger.Println("cc2.Get after tick", key)
 	val2, exists, err := cc2.externalCache.Get(ctx, key)
 	require.NoError(t, err)
 	require.False(t, exists) // key expired
 	require.Zero(t, len(val2))
+	logger.Println("testExternalCache:finishing", key)
 }
 
 func TestExternalExpire(t *testing.T) {
@@ -184,19 +190,6 @@ func TestExternalExpire(t *testing.T) {
 	var wg sync.WaitGroup
 	getCalc := func(ctx context.Context) (calc calcFunc, expireCh chan struct{}) {
 		expireCh = make(chan struct{}, 1)
-		expireEntry := func(ctx context.Context) bool {
-			defer wg.Done()
-			thread := getThread(ctx)
-			logger.Printf("thread %v: expireEntry: checking if entry should be expired", thread)
-			select {
-			case <-ctx.Done():
-				logger.Printf("thread %v :expireEntry: context done", thread)
-				return false
-			case <-expireCh:
-				logger.Printf("thread %v expireEntry: entry expired", thread)
-			}
-			return true
-		}
 		calc = func(ctx context.Context) (int, CachedCalcOpts, error) {
 			thread := getThread(ctx)
 			mu.Lock()
@@ -206,7 +199,7 @@ func TestExternalExpire(t *testing.T) {
 			return returnValue, CachedCalcOpts{
 				MaxTTL:      time.Hour,
 				MinTTL:      time.Hour,
-				ExpireEntry: expireEntry,
+				ExpireEntry: expireCh,
 			}, nil
 		}
 		return

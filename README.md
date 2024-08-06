@@ -19,21 +19,20 @@ The situation could be improved by :
 2. Cache the response result based on the request and return subsequent responses from the cache 
 rather than calculating them again.
 
-Meet the CachedCalculations, which I created to implement these specific requirements as a backend developer.
+Meet the CachedCalculations, which was created to implement these specific requirements for development of efficient backend services.
 
 ## Implementation
 
 1. Provided, that some calculation is "cached", it guarantees that when it does not hit the cache, 
 it automatically performs necessary calculation, caches response, and returns it to the client. 
-All the requests for the same resource will be waiting for the result if calculation for the resource has been started, 
-so the same calculation is never completed concurrently, either on the same machine or distributed.
-2. It provides the facility for cache entry expiration:
-- If the data isn't too old (MinTTL), let's say 1-10 seconds, 
-for MinTTL time just cached response is returned for the subsequent requests of the same resource.
-- When MinTTL for the data expired, it still returns cached response to the client 
-but immediately performs the calculation of the resource in background (refresh). 
-When refresh finished, it stores the response to the cache, and will return the refreshed response for subsequent calls.
-- When the data has expired totally (MaxTTL), it's forcefully removed and will be recalculated on demand.
+All the requests for the same resource will be waiting for the result if the calculation for the resource has been started,
+so the same calculation is never completed concurrently, either within the same service instance or distributed like k8 or even different machines.
+2. It provides these facilities for cache entry expiration:
+- `MinTTL timeout`: If the data isn't too old, let's say 1-10 seconds, for MinTTL time just cached response is returned for the subsequent requests of the same resource. When MinTTL for the data expired, it still returns cached response to the client but immediately starts the calculation of the resource in background (refresh). Until value refreshed it continues to return the cached response. When refresh finished, it stores the response to the cache, and will return the refreshed response for subsequent calls.
+- `MaxTTL timeout` When the data has expired totally, it's forcefully removed and will be recalculated on demand. Next value is returned upon completion of the calculation.
+- `ExpireEntry channel` channel is provided to expire cache entry immediately. It acts like MaxTTL - on next call the calculation will be performed and upon completion the new value will be returned to the client. 
+If some watcher sends a message to this channel, the cached value for the key is immediately expired. 
+It will be recalculated next time when function for the key is called.
 3. CachedCalculation provides a simple method `GetCachedCalc` of refactoring existing backend methods to use its infrastructure. 
 The idea is to wrap all the existing methods that handle some request to a function of type 
 ```

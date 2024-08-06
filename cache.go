@@ -2,6 +2,7 @@ package cachecalc
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"reflect"
@@ -12,9 +13,9 @@ import (
 type CachedCalcOpts struct {
 	MaxTTL, MinTTL time.Duration
 	CalcTime       time.Duration // the duration of last calculation
-	// ExpireEntry is a func which returns true if entry needs to be expired
+	// ExpireEntry is a channel to send signal on entry expiration
 	// it should also watch for ctx.Done() and return false in that case
-	ExpireEntry func(ctx context.Context) bool
+	ExpireEntry chan struct{}
 }
 
 // CalculateValue this is type of function which returns interface{} type
@@ -25,7 +26,8 @@ type (
 
 // DefaultCCs default cached calculations cache used by GetCachedCalc
 // It does not use external cache for coordinating between multiple distributed
-var DefaultCCs = NewCachedCalculations(4, nil)
+var cancelDefaultCtx, CancelDefaultCCs = context.WithCancel(context.Background())
+var DefaultCCs = NewCachedCalculations(cancelDefaultCtx, nil, 4)
 
 type request struct {
 	calculateValue CalculateValueAndOpt
@@ -33,7 +35,7 @@ type request struct {
 	ready          chan error // error message, empty if no error
 	dest           any        // but provide pointer to the result!!!
 	limitWorkers   bool
-	CachedCalcOpts
+	CachedCalcOpts // request struct
 }
 
 type CacheEntry struct {
@@ -58,6 +60,8 @@ type CachedCalculations struct {
 	workers       sync.WaitGroup // housekeeping of goroutines which calculate values for specific keys
 	expire        sync.WaitGroup
 	limitWorkers  chan struct{}
+	ctx           context.Context
+	cancel        context.CancelFunc
 	sync.Mutex
 	sync.WaitGroup
 }
@@ -76,12 +80,26 @@ func init() {
 // It creates two threads which handle and coordinate cached backend calculations
 // Graceful exit from app should include expiring ctx context and then smartCacheInstance.Wait()
 // This will gracefully finish the job of those threads
-func NewCachedCalculations(maxWorkers int, externalCache ExternalCache) *CachedCalculations {
+func NewCachedCalculations(ctx context.Context, externalCache ExternalCache, maxWorkers int) *CachedCalculations {
 	var cc CachedCalculations
 	cc.entries = make(map[any]*CacheEntry, 1024*16)
-	cc.externalCache = externalCache
 	cc.limitWorkers = make(chan struct{}, maxWorkers+1)
-	//cc.buf = new(bytes.Buffer)
+	cc.ctx, cc.cancel = context.WithCancel(ctx)
+	cc.externalCache = externalCache
+	if externalCache != nil {
+		// remove internal cache entries which expired externally
+		cc.Add(1)
+		go func() {
+			ctx := cc.ctx
+			thread := getThread(ctx)
+			ch := externalCache.ExpireEntries(ctx)
+			for key := range ch {
+				logger.Printf("thread %v: external cache expired key %s", thread, key)
+				cc.removeEntry(ctx, key, false)
+			}
+			cc.Done()
+		}()
+	}
 	return &cc
 }
 
@@ -118,10 +136,15 @@ func GetCachedCalcOptX[T any](cc *CachedCalculations, ctx context.Context, key a
 		cc.Unlock()
 	}()
 	// then wait for the result
+	logger.Printf("thread %v, waiting for ready channel\n", getThread(ctx))
 	err = <-ready
-	cc.Lock()
+	logger.Printf("thread %v, ready channel received\n", getThread(ctx))
 	cc.Done()
-	cc.Unlock()
+	if err != nil {
+		logger.Printf("thread %v, GetCachedCalcOptX returns error: %v\n", getThread(ctx), err)
+		return
+	}
+	logger.Printf("thread %v, GetCachedCalcOptX returns: %v\n", getThread(ctx), result)
 	return
 }
 
@@ -167,7 +190,7 @@ func (cc *CachedCalculations) Close() {
 		delete(cc.entries, k) // Close(), cancel+
 	}
 	if cc.externalCache != nil {
-		cc.externalCache.Close()
+		_ = cc.externalCache.Close()
 	}
 }
 
@@ -226,14 +249,24 @@ func (cc *CachedCalculations) obtainEntry(ctx context.Context, r *request) *Cach
 	return entry
 }
 
-// pushValue pushes the error if calculation returned error to the ready channel of request r,
-// otherwise it deserializes the value and pushes the result of deserialization to the ready channel
+// pushValue pushes a value from the cache to the request's ready channel. If the entry has an error, it sends the error instead.
+// If startExpiration is true and ExpireEntry is not nil, it starts a goroutine to handle the expiration of the entry.
+// if it receives expiration signal, it removes the entry from the cache and then broadcasts the `expiration job done` signal back to the client by closing the channel.
+//
+// Parameters:
+// - entry: The cache entry containing the value or error.
+// - r: The request containing the ready channel and expiration channel.
+// - startExpiration: A flag indicating whether to start the expiration process.
 func (cc *CachedCalculations) pushValue(entry *CacheEntry, r *request, startExpiration bool) {
 	ctx := entry.ctx
 	thread := getThread(ctx)
-	if entry.Err != nil {
-		r.ready <- entry.Err
-		logger.Printf("thread %v, pushing error %s = %v to ready channel", thread, r.key, entry.Err)
+	err := entry.Err
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err != nil {
+		r.ready <- err
+		logger.Printf("thread %v, pushing error %s = %v to ready channel", thread, r.key, err)
 	} else {
 		// store value to the destination variable
 		err := deserialize(entry.Value, r.dest)
@@ -243,24 +276,47 @@ func (cc *CachedCalculations) pushValue(entry *CacheEntry, r *request, startExpi
 		if startExpiration && r.ExpireEntry != nil {
 			// run goroutine to expire entry
 			go func() {
-				logger.Printf("thread %v, starting expiration goroutine for entry %s\n", thread, r.key)
-				if r.ExpireEntry(ctx) {
-					cc.removeEntry(r.key)
+				logger.Printf("thread %v, listening expiration channel for entry %s\n", thread, r.key)
+				// wait for expiration signal or context done
+				select {
+				case <-r.ExpireEntry:
+					logger.Printf("thread %v, expiration signal received: entry %s is being removed\n", thread, r.key)
+					cc.removeEntry(entry.ctx, r.key, true)
+					logger.Printf("thread %v, broadcast the `removing of entry %s completed` signal back to the client", thread, r.key)
+					close(r.ExpireEntry)
+				case <-ctx.Done():
+					logger.Printf("thread %v, entry %s context done\n", thread, r.key)
 				}
 			}()
 		}
 	}
 }
 
-func (cc *CachedCalculations) removeEntry(key any) {
+func (cc *CachedCalculations) removeEntry(ctx context.Context, key any, removeExternal bool) {
 	cc.Lock()
-	defer cc.Unlock()
+	defer func() {
+		logger.Printf("thread %v, removeEntry: entry %s was removed\n", getThread(ctx), key)
+		cc.Unlock()
+	}()
+	logger.Printf("thread %v, removing entry %s:locked\n", getThread(ctx), key)
 	entry, ok := cc.entries[key]
 	if !ok {
+		thread := getThread(ctx)
+		logger.Printf("thread %v entry %s not found in cache upon expiration", thread, key)
 		return
 	}
-	entry.cancel()          // cancel context to avoid context leak
 	delete(cc.entries, key) // remove entry from cache upon expiration : pushValue(), cancel+
+	defer entry.cancel()    // cancel context to avoid context leak
+	if removeExternal && cc.externalCache != nil {
+		key := fmt.Sprint(key)
+		err := cc.externalCache.Del(entry.ctx, key)
+		if err != nil {
+			logger.Printf("failed to remove key %s from external cache: %s", key, err)
+			return
+		}
+		thread := getThread(entry.ctx)
+		logger.Printf("thread %v key %s removed from external cache", thread, key)
+	}
 }
 
 // getThread returns the thread id from the context, this is a utility for debugging
@@ -281,12 +337,18 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 		if pushValue {
 			cc.pushValue(entry, r, false) // calculateValue() replaces value to cache if it is not expired, checks whether need to be refreshed below
 		}
+		logger.Printf("thread %v,entry %s checking refresh %v", thread, r.key, entry.Refresh.Sub(time.Now()))
 		if entry.Refresh.After(time.Now()) {
 			err = entry.Err
 			entry.Unlock()
 			return err
 		}
 		reason = "entry refresh"
+	}
+	if entry.ctx.Err() != nil {
+		err = entry.ctx.Err()
+		entry.Unlock()
+		return err
 	}
 	// will be calculating/refreshing value
 	if entry.wait == nil {
@@ -302,6 +364,9 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	started := time.Now()
 	logger.Printf("thread %v:%s, reason %s, calculating value...", thread, r.key, reason)
 	v, opt, err := r.calculateValue(context.WithValue(ctx, "reason", reason))
+	// set default for timeouts: if set to zero, set them to an hour
+	opt.MaxTTL = nzDuration(opt.MaxTTL, opt.MinTTL)
+	opt.MinTTL = nzDuration(opt.MinTTL, opt.MaxTTL)
 	logger.Printf("thread %v,value %s calculated to %v, reason: %s", thread, r.key, v, reason)
 	if r.limitWorkers {
 		// pop worker
@@ -328,7 +393,7 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	w := entry.wait
 	entry.wait = nil // calculations complete
 	close(w)         // broadcast result of local calculation to clients
-	logger.Printf("thread %v,entry %s broadcast value %v is ready, setting cache entry\n", thread, r.key, v)
+	logger.Printf("thread %v,entry %s broadcast value %v is ready, setting cache entry, refresh %v expire %v\n", thread, r.key, v, r.MinTTL, r.MaxTTL)
 	// update refresh and expire
 	entry.Refresh = now.Add(r.MinTTL)
 	entry.Expire = now.Add(r.MaxTTL)
@@ -378,11 +443,25 @@ func (cc *CachedCalculations) RemoveEntries(filter func(key any, entry *CacheEnt
 	}
 }
 
+/*
+nzDuration returns the first non-zero duration from the provided list of durations.
+If all provided durations are zero, it returns a default duration of 100 years.
+
+Parameters:
+- durations: A variadic parameter of type `time.Duration`. This represents the list of durations to check.
+
+Returns:
+- time.Duration: The first non-zero duration from the provided list, or a default duration of 100 years if all are zero.
+
+Usage:
+
+This function is useful when you want to provide a list of potential durations and select the first valid (non-zero) one. If none are valid, a default duration is used.
+*/
 func nzDuration(durations ...time.Duration) time.Duration {
 	for _, d := range durations {
 		if d != 0 {
 			return d
 		}
 	}
-	return time.Hour
+	return time.Hour * 24 * 365 * 100
 }

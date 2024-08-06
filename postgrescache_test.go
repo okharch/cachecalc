@@ -110,7 +110,7 @@ func TestExternalCachePostgres(t *testing.T) {
 	ctx := context.TODO()
 	logger.Println("TestExternalCachePostgres...")
 	testExternalCache(t, ctx, initPgCache(t))
-
+	log.Println("TestExternalCachePostgres done")
 }
 
 func initPgCache(t *testing.T) func(context.Context) ExternalCache {
@@ -135,4 +135,10 @@ func TestRemoteConcurrentPostgres(t *testing.T) {
 	log.Printf("TestRemoteConcurrentPostgres...")
 	testRemoteConcurrent(t, ctx, initPgCache(t))
 
+}
+
+func TestExpirationPostgres(t *testing.T) {
+	logger.Println("TestExpirationRedis...")
+	// init redis external cache
+	testKeyExpiration(t, initPgCache(t))
 }
