@@ -88,7 +88,8 @@ func NewPostgresCache(ctx context.Context, dbUrl string) (ExternalCache, error) 
 	}
 
 	p := &PostgresCache{
-		db: db,
+		db:  db,
+		dsn: dbUrl,
 	}
 
 	if err = p.purgeExpired(ctx); err != nil {
@@ -170,18 +171,20 @@ func (p *PostgresCache) Close() error {
 func (p *PostgresCache) ExpireEntries(ctx context.Context) chan string {
 	ch := make(chan string)
 
+	// Listen for notifications
+	listener := pq.NewListener(p.dsn, 10*time.Second, time.Minute, nil)
+	logger.Printf("Listening for notifications on %s", p.dsn)
+	err := listener.Listen("cache_entry_deleted")
+	if err != nil {
+		logger.Printf("Error setting up listener: %v", err)
+		return nil
+	}
+	defer listener.Close()
+
 	go func() {
 		defer close(ch)
 
-		// Listen for notifications
-		listener := pq.NewListener(p.dsn, 10*time.Second, time.Minute, nil)
-		err := listener.Listen("cache_entry_deleted")
-		if err != nil {
-			logger.Printf("Error setting up listener: %v", err)
-			return
-		}
-		defer listener.Close()
-
+		logger.Printf("Listening for db notifications on cache_entry_deleted")
 		for {
 			select {
 			case <-ctx.Done():
