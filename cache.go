@@ -90,9 +90,8 @@ func NewCachedCalculations(ctx context.Context, externalCache ExternalCache, max
 		// remove internal cache entries which expired externally
 		cc.Add(1)
 		go func() {
-			ctx := cc.ctx
-			thread := getThread(ctx)
-			ch := externalCache.ExpireEntries(ctx)
+			thread := getThread(cc.ctx)
+			ch := externalCache.ExpireEntries(cc.ctx)
 			for key := range ch {
 				logger.Printf("thread %v: external cache expired key %s", thread, key)
 				cc.removeEntry(ctx, key, false)
@@ -177,6 +176,7 @@ func GetCachedCalcX[T any](cc *CachedCalculations, ctx context.Context, key any,
 // it tries to gracefully interrupt all ongoing calculations using their context
 // when it succeeds in this it removes the record about job
 func (cc *CachedCalculations) Close() {
+	cc.cancel()
 	cc.Wait()
 	cc.Lock()
 	cc.workers.Wait()

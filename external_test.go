@@ -143,8 +143,10 @@ func testRemoteConcurrent(t *testing.T, ctx context.Context, initExternalCache f
 
 func testExternalCache(t *testing.T, ctx context.Context, initExternalCache func(ctx context.Context) ExternalCache) {
 	cc1, cc2 := init2Caches(t, ctx, initExternalCache)
-	//defer cc1.Close()
-	//defer cc2.Close()
+	defer func() {
+		cc1.Close()
+		cc2.Close()
+	}()
 	var entry CacheEntry
 	var err error
 	v, err := serialize(1)
