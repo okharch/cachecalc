@@ -293,14 +293,18 @@ func testImmediate(t *testing.T, now time.Time) {
 // Parameters:
 // - ctx: The context to control cancellation.
 // - expireEntry: The channel used to signal and wait for expiration.
-func sendExpirationSignal(ctx context.Context, expireEntry chan struct{}) {
+func sendExpirationSignal(ctx context.Context, expireEntry chan struct{}) (result bool) {
 	select {
 	case expireEntry <- struct{}{}:
+		result = true
 	case <-ctx.Done():
+	case <-time.After(tick):
+		return false
 	}
 	// now wait until expireEntry is closed
 	select {
 	case <-expireEntry:
 	case <-ctx.Done():
 	}
+	return
 }

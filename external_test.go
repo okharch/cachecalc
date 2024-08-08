@@ -191,7 +191,7 @@ func TestExternalExpire(t *testing.T) {
 	var mu sync.RWMutex
 	var wg sync.WaitGroup
 	getCalc := func(ctx context.Context) (calc calcFunc, expireCh chan struct{}) {
-		expireCh = make(chan struct{}, 1)
+		expireCh = make(chan struct{})
 		calc = func(ctx context.Context) (int, CachedCalcOpts, error) {
 			thread := getThread(ctx)
 			mu.Lock()
@@ -221,20 +221,27 @@ func TestExternalExpire(t *testing.T) {
 		var err error
 		*v, err = GetCachedCalcOptX(cc, ctx, key, calc, true)
 		require.NoError(t, err)
+		logger.Printf("thread %v:get returns %v\n", getThread(ctx), *v)
 	}
+	logger.Println("get for the first time")
 	go get(cc1, ctx1, calc1, &v1)
 	go get(cc2, ctx2, calc2, &v2)
 	wg.Wait()
 	require.Equal(t, 1, v1)
 	require.Equal(t, 1, v2)
 	// force refresh
-	logger.Println("expiration signal sent to v1")
-	expireCh1 <- struct{}{}
-	logger.Println("expiration signal sent to v2")
-	expireCh2 <- struct{}{}
+	logger.Println("sending expiration signal to v1,v2")
+	if sendExpirationSignal(ctx1, expireCh1) {
+		logger.Println("expiration signal received by v1")
+	} else if sendExpirationSignal(ctx2, expireCh2) {
+		logger.Println("expiration signal received by v2")
+	} else {
+		t.Fatal("expiration signal not received by any of v1,v2")
+	}
 	// now it should be recalculated
 	wg.Add(2)
-	time.Sleep(time.Millisecond * 100)
+	calc1, _ = getCalc(ctx1)
+	calc2, _ = getCalc(ctx2)
 	go get(cc1, ctx1, calc1, &v1)
 	go get(cc2, ctx2, calc2, &v2)
 	wg.Wait()
@@ -242,34 +249,8 @@ func TestExternalExpire(t *testing.T) {
 	require.Equal(t, 2, v2)
 	cancel1()
 	cancel2()
-}
-
-func testExpiration(t *testing.T, ctx context.Context, initExternalCache func(ctx context.Context) ExternalCache) {
-	cc1, cc2 := init2Caches(t, ctx, initExternalCache)
-	defer cc1.Close()
-	defer cc2.Close()
-	var d1, d2, d3 int
-	var wg sync.WaitGroup
-	key := getRandomKey(t)
-	GetI1 := initCalcTest(t, &wg, cc1, key)
-	GetI2 := initCalcTest(t, &wg, cc2, key)
-	wg.Add(3)
-	GetI1(&d1, 1)
-	GetI2(&d2, 2)
-	GetI2(&d3, 3)
-	wg.Wait()
-	require.Equal(t, 1, d1)
-	require.Equal(t, 1, d2)
-	require.Equal(t, 1, d3)
-	time.Sleep(refresh + tick)
-	wg.Add(3)
-	GetI2(&d1, 4)
-	require.Equal(t, 1, d1)
-	GetI1(&d2, 5)
-	require.Equal(t, 1, d2)
-	time.Sleep(tick * 3)
-	GetI1(&d3, 6)
-	wg.Wait()
-	require.Equal(t, 2, d3)
-	DefaultCCs.Wait()
+	cc1.cancel()
+	cc2.cancel()
+	cc1.Wait()
+	cc2.Wait()
 }
