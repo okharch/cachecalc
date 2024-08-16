@@ -58,7 +58,6 @@ type CachedCalculations struct {
 	entries       map[any]*CacheEntry
 	externalCache ExternalCache
 	workers       sync.WaitGroup // housekeeping of goroutines which calculate values for specific keys
-	expire        sync.WaitGroup
 	limitWorkers  chan struct{}
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -197,38 +196,40 @@ func (cc *CachedCalculations) Close() {
 // for request r obtains value from cache/calculation and pushes status of the operation to r.wait
 // then checks whether value need to be refreshed in cache
 func (cc *CachedCalculations) obtainValue(ctx context.Context, r *request) (err error) {
-	if cc.externalCache == nil {
-		return cc.obtainLocal(ctx, r)
-	} else {
-		return cc.obtainExternal(ctx, r)
-	}
-}
-
-// simple case for single CachedCalculations instance.
-func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err error) {
 	entry := cc.obtainEntry(ctx, r) // entry is locked after call
-	thread := getThread(ctx)
-	wait := entry.wait // before starting calculation check whether someone else is not performing it already
-	if wait != nil {
-		// non-active thread can just return whatever value is there and be it
-		// unless entry expired
-		if entry.Expire.Before(time.Now()) {
-			// must not continue lock on entry until entry is being calculated!
-			entry.Unlock()
-			logger.Printf("thread %v:%s,waiting while other thread calculating\n", thread, r.key)
-			<-wait // wait until it was closed
-			// read Lock is enough to return value
-			entry.Lock()
-		} else {
-			logger.Printf("thread %v, key %s already being updated by someone else but value still not expired", thread, r.key)
-		}
-		cc.pushValue(entry, r, false) // obtainLocal() pushes value to cache when it is ready or not expired
-		err = entry.Err
-		entry.Unlock()
+	if valueReady, err := cc.valueReady(ctx, entry, r); valueReady {
+		// entry is unlocked here
 		return err
 	}
 	// entry is locked here
-	return cc.calculateValue(ctx, r, entry, true) // unlocks entry
+	if cc.externalCache == nil {
+		return cc.calculateValue(ctx, r, entry, true) // unlocks entry
+	} else {
+		return cc.obtainExternal(ctx, entry, r)
+	}
+}
+
+func (cc *CachedCalculations) valueReady(ctx context.Context, entry *CacheEntry, r *request) (result bool, err error) {
+	thread := getThread(ctx)
+	wait := entry.wait // before starting calculation check whether someone else is not performing it already
+	if wait == nil {
+		return
+	}
+	// non-active thread can just return whatever value is there and be it
+	// unless entry expired
+	if entry.Expire.Before(time.Now()) {
+		// must not continue lock on entry until entry is being calculated!
+		entry.Unlock()
+		logger.Printf("thread %v:%s,waiting while other thread calculating\n", thread, r.key)
+		<-wait // wait until it was closed
+		entry.RLock()
+		defer entry.RUnlock()
+	} else {
+		defer entry.Unlock()
+		logger.Printf("thread %v, key %s already being updated by someone else but value still not expired", thread, r.key)
+	}
+	cc.pushValue(entry, r, false) // obtainLocal() pushes value to cache when it is ready or not expired
+	return true, entry.Err
 }
 
 // obtainEntry locks local cache and checks whether entry exist.
@@ -275,9 +276,12 @@ func (cc *CachedCalculations) pushValue(entry *CacheEntry, r *request, startExpi
 		r.ready <- err
 		if startExpiration && r.ExpireEntry != nil {
 			// run goroutine to expire entry
+			var wg sync.WaitGroup
+			wg.Add(1)
 			go func() {
 				logger.Printf("thread %v, listening expiration channel for entry %s\n", thread, r.key)
 				// wait for expiration signal or context done
+				wg.Done()
 				select {
 				case <-r.ExpireEntry:
 					logger.Printf("thread %v, expiration signal received: entry %s is being removed\n", thread, r.key)
@@ -288,16 +292,15 @@ func (cc *CachedCalculations) pushValue(entry *CacheEntry, r *request, startExpi
 					logger.Printf("thread %v, entry %s context done\n", thread, r.key)
 				}
 			}()
+			wg.Wait()
+			time.Sleep(time.Millisecond) // give time for goroutine to start
 		}
 	}
 }
 
 func (cc *CachedCalculations) removeEntry(ctx context.Context, key any, removeExternal bool) {
 	cc.Lock()
-	defer func() {
-		logger.Printf("thread %v, removeEntry: entry %s was removed\n", getThread(ctx), key)
-		cc.Unlock()
-	}()
+	defer cc.Unlock()
 	logger.Printf("thread %v, removing entry %s:locked\n", getThread(ctx), key)
 	entry, ok := cc.entries[key]
 	if !ok {
@@ -317,6 +320,7 @@ func (cc *CachedCalculations) removeEntry(ctx context.Context, key any, removeEx
 		thread := getThread(entry.ctx)
 		logger.Printf("thread %v key %s removed from external cache", thread, key)
 	}
+	logger.Printf("thread %v, removeEntry: entry %s was removed\n", getThread(ctx), key)
 }
 
 // getThread returns the thread id from the context, this is a utility for debugging
@@ -326,7 +330,10 @@ func getThread(ctx context.Context) any {
 }
 
 // calculateValue expects entry to be locked with .Lock and will unlock it before exit
-func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, entry *CacheEntry, pushValue bool) (err error) {
+func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, entry *CacheEntry, unlockEntry bool) (err error) {
+	if unlockEntry {
+		defer entry.Unlock() // entry locked before calculateValue
+	}
 	reason := "entry expired"
 	thread := ctx.Value("thread")
 	hadValue := entry.Expire.After(time.Now())
@@ -334,27 +341,21 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 		reason = "entry init"
 	}
 	if hadValue {
-		if pushValue {
-			cc.pushValue(entry, r, false) // calculateValue() replaces value to cache if it is not expired, checks whether need to be refreshed below
-		}
+		cc.pushValue(entry, r, true) // calculateValue() replaces value to cache if it is not expired, checks whether need to be refreshed below
 		logger.Printf("thread %v,entry %s checking refresh %v", thread, r.key, entry.Refresh.Sub(time.Now()))
 		if entry.Refresh.After(time.Now()) {
 			err = entry.Err
-			entry.Unlock()
 			return err
 		}
 		reason = "entry refresh"
 	}
 	if entry.ctx.Err() != nil {
 		err = entry.ctx.Err()
-		entry.Unlock()
 		return err
 	}
 	// will be calculating/refreshing value
-	if entry.wait == nil {
-		entry.wait = make(chan struct{}) // mark that calculation is being performed for this entry
-	}
-	entry.Unlock() // it was locked before calculateValue
+	entry.wait = make(chan struct{}) // mark that calculation is being performed for this entry
+	entry.Unlock()                   // it was locked before calculateValue
 	logger.Printf("thread %v,lock was released for entry %s\n", thread, r.key)
 	if r.limitWorkers {
 		// push new worker
@@ -384,7 +385,7 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 		r.MinTTL = r.MaxTTL
 	}
 	logger.Printf("thread %v,waiting to lock entry %s for updating && broadcasting value is ready\n", thread, r.key)
-	entry.Lock()
+	entry.Lock() // lock entry before updating
 	if err == nil {
 		entry.Value, err = serialize(v)
 	}
@@ -402,7 +403,6 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 		cc.pushValue(entry, r, true) // calculateValue() pushes the completely new value to cache
 		logger.Printf("thread %v,entry %s value %v has been pushed to ready channel\n", thread, r.key, v)
 	}
-	entry.Unlock()
 	logger.Printf("thread %v,entry %s %v was unlocked\n", thread, r.key, v)
 	return
 }
