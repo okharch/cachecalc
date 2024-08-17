@@ -18,7 +18,7 @@ func init() {
 	logger = log.New(os.Stderr, "", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
 }
 
-const refresh = tick * 3
+const refresh = tick * 5 // calc gets 2 ticks, minTTL is aligned to 4 ticks according to that
 const expire = tick * 20
 
 var counter int
@@ -194,7 +194,7 @@ func TestTimeOuts(t *testing.T) {
 		mu.Lock()
 		returnValue++
 		mu.Unlock()
-		logger.Println("calc will return ", returnValue)
+		logger.Printf("thread %v:calc will return %v", ctx.Value("thread"), returnValue)
 		return returnValue, CachedCalcOpts{
 			MaxTTL: expire,
 			MinTTL: refresh,
@@ -297,14 +297,19 @@ func sendExpirationSignal(ctx context.Context, expireEntry chan struct{}) (resul
 	select {
 	case expireEntry <- struct{}{}:
 		result = true
+		logger.Printf("sendExpirationSignal:thread %s:expiration signal sent", ctx.Value("thread"))
 	case <-ctx.Done():
+		logger.Printf("sendExpirationSignal:thread %s:ctx cancelled", ctx.Value("thread"))
 	case <-time.After(tick):
+		logger.Printf("sendExpirationSignal:thread %s:timeout", ctx.Value("thread"))
 		return false
 	}
 	// now wait until expireEntry is closed
 	select {
 	case <-expireEntry:
+		logger.Printf("sendExpirationSignal:thread %s:expire entry closed", ctx.Value("thread"))
 	case <-ctx.Done():
+		logger.Printf("sendExpirationSignal:thread %s:ctx cancelled on waiting expireEntry closed", ctx.Value("thread"))
 	}
 	return
 }

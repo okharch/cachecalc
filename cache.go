@@ -341,13 +341,14 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 		reason = "entry init"
 	}
 	if hadValue {
-		cc.pushValue(entry, r, true) // calculateValue() replaces value to cache if it is not expired, checks whether need to be refreshed below
+		cc.pushValue(entry, r, true) // calculateValue() replaces value to cache if it is not expired, checks whether it needs to be refreshed below
 		logger.Printf("thread %v,entry %s checking refresh %v", thread, r.key, entry.Refresh.Sub(time.Now()))
 		if entry.Refresh.After(time.Now()) {
 			err = entry.Err
 			return err
 		}
 		reason = "entry refresh"
+		logger.Printf("thread %v,entry %s will be refreshed", thread, r.key)
 	}
 	if entry.ctx.Err() != nil {
 		err = entry.ctx.Err()
