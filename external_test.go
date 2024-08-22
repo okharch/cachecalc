@@ -211,6 +211,11 @@ func TestExternalExpire(t *testing.T) {
 	ctx2, cancel2 := context.WithCancel(context.WithValue(context.TODO(), "thread", 2))
 	// create two different cc with external cache
 	cc1, cc2 := init2Caches(t, ctx1, initRedisCache(t))
+	keyLock := getKeyLock(key)
+	// just in case, remove the lock before starting
+	// TODO: we need lock to be short lived, so it is automatically removed after some time. if we need it for more time we need to refresh it
+	logger.Printf("forcefully remove the lock %s\n", keyLock)
+	require.NoError(t, cc1.externalCache.Del(ctx1, keyLock))
 	var v1, v2 int
 	// get it for the first time
 	wg.Add(2)
@@ -247,10 +252,10 @@ func TestExternalExpire(t *testing.T) {
 	wg.Wait()
 	require.Equal(t, 2, v1)
 	require.Equal(t, 2, v2)
-	cancel1()
-	cancel2()
 	cc1.cancel()
 	cc2.cancel()
 	cc1.Wait()
 	cc2.Wait()
+	cancel1()
+	cancel2()
 }
