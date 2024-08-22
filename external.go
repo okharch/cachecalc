@@ -7,6 +7,9 @@ import (
 	"time"
 )
 
+// external cache minimum delay, it can be aligned during execution
+var ecMinDelay = time.Millisecond * 100
+
 func (cc *CachedCalculations) obtainExternal(ctx context.Context, entry *CacheEntry, r *request) (err error) {
 	key := fmt.Sprint(r.key)
 	lockKey := getKeyLock(key)
@@ -34,28 +37,25 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, entry *CacheEn
 	}()
 	//reason := "init value for local cache"
 	// this loop tries to obtain either lock to external cache for the key to calculate its own version
+	//entryLocked := make(chan struct{})
+	//lockTTL := time.Millisecond * 20
 	ttl := nzDuration(r.MaxTTL)
 	logger.Printf("thread %v: trying to set external lock %s", thread, lockKey)
-	for {
-		// check for context cancellation
-		if err = ctx.Err(); err != nil {
-			return err
-		}
-		// try to set lock before any operation:read or write
-		externalLock, err = cc.externalCache.SetNX(ctx, lockKey, []byte(fmt.Sprint(thread)), ttl)
-		if err != nil {
-			return fmt.Errorf("thread %v: failed to set external lock %s: %w", thread, lockKey, err)
-		}
-		if externalLock {
-			break
-		}
-		// wait sometime before next try
-		time.Sleep(time.Millisecond * 20)
+	ec := cc.externalCache
+	lockRelease, err := GetExternalLock(ctx, ec, lockKey)
+	if err != nil {
+		return fmt.Errorf("thread %v: failed to obtain external lock %s: %w", thread, lockKey, err)
 	}
+	defer func() {
+		if errRelease := lockRelease(); errRelease != nil && err == nil {
+			err = fmt.Errorf("failed to release external lock %s: %w", lockKey, errRelease)
+			logger.Printf("thread %v: %s", thread, err)
+		}
+	}()
 	logger.Printf("thread %v: got external lock %s, fetching latest value...", thread, lockKey)
 	// externalLock obtained, check entrySerialized for key
 	logger.Printf("thread %v:[%s] getting external value", thread, key)
-	entrySerialized, externalExists, err := cc.externalCache.Get(ctx, key)
+	entrySerialized, externalExists, err := ec.Get(ctx, key)
 	if err != nil {
 		return fmt.Errorf("thread %v: %s failed to obtain entrySerialized from external cache: %w", thread, key, err)
 	}
@@ -89,9 +89,8 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, entry *CacheEn
 	return err
 }
 
+// this is used for debug only
 func getEntryValue(entry *CacheEntry, r *request) any {
-	//entry.RLock()
-	//defer entry.RUnlock()
 	deserialize(entry.Value, r.dest)
 	v := reflect.ValueOf(r.dest).Elem()
 	return v

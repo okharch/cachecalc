@@ -2,6 +2,7 @@ package cachecalc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/go-redis/redis/v8"
 	"os"
@@ -34,7 +35,7 @@ type RedisExternalCache struct {
 }
 
 func (r *RedisExternalCache) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
-	return r.client.Set(ctx, key, string(value), ttl).Err()
+	return r.client.Set(ctx, key, value, ttl).Err()
 }
 
 func (r *RedisExternalCache) SetNX(ctx context.Context, key string, value []byte, ttl time.Duration) (bool, error) {
@@ -45,32 +46,18 @@ func (r *RedisExternalCache) Get(ctx context.Context, key string) (value []byte,
 	cmd := r.client.Get(ctx, key)
 	err = cmd.Err()
 	if err != nil {
-		// When doing a key lookup the Redis client will return an error if the key does not exist.
-		// You can check if that error is equal to redis. Nil ,
-		// which indicates that the key was not found
-		if err.Error() == "redis: nil" {
+		if errors.Is(err, redis.Nil) {
 			return nil, false, nil
 		}
-		return
+		return nil, false, err
 	}
 	exists = true
 	value, err = cmd.Bytes()
-	return
+	return value, exists, err
 }
 
 func (r *RedisExternalCache) Del(ctx context.Context, key string) error {
 	return r.client.Del(ctx, key).Err()
-}
-
-// NewRedisCache creates an instance of ExternalCache which is connected to ENV{REDIS_URL} or local redis server if not specified.
-func NewRedisCache(ctx context.Context) (ExternalCache, error) {
-	client, err := GetRedis(ctx)
-	// Enable keyspace notifications
-	if err != nil {
-		return nil, err
-	}
-	rec := &RedisExternalCache{client}
-	return rec, nil
 }
 
 func (r *RedisExternalCache) Close() error {
@@ -78,10 +65,6 @@ func (r *RedisExternalCache) Close() error {
 }
 
 func (r *RedisExternalCache) ExpireEntries(ctx context.Context) chan string {
-	// Set configuration for both deletion and expiration events
-	// https://redis.io/docs/latest/develop/use/keyspace-notifications/
-	// g     Generic commands (non-type specific) like DEL, EXPIRE, RENAME, ...
-	// E     Keyevent events, published with __keyevent@<db>__ prefix.
 	err := r.client.ConfigSet(ctx, "notify-keyspace-events", "gE").Err()
 	if err != nil {
 		logger.Printf("failed to set notify-keyspace-events: %s", err)
@@ -118,8 +101,38 @@ func (r *RedisExternalCache) ExpireEntries(ctx context.Context) chan string {
 		}
 	}()
 
-	// Ensure subscription is established
-	//time.Sleep(time.Millisecond * 20)
+	time.Sleep(time.Millisecond * 20)
 
 	return ch
+}
+
+func (r *RedisExternalCache) DelValue(ctx context.Context, key string, value []byte) error {
+	script := redis.NewScript(`
+		local current = redis.call('GET', KEYS[1])
+		if current == ARGV[1] then
+			return redis.call('DEL', KEYS[1])
+		else
+			return 0
+		end
+	`)
+	ret, err := script.Run(ctx, r.client, []string{key}, value).Result()
+	if err != nil {
+		return err
+	}
+	if ret == int64(0) {
+		return ErrNoLockFound
+	}
+	return nil
+}
+
+// NewRedisCache creates an instance of ExternalCache connected to ENV{REDIS_URL} or local redis server if not specified.
+func NewRedisCache(ctx context.Context) (ExternalCache, error) {
+	client, err := GetRedis(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rec := &RedisExternalCache{
+		client: client,
+	}
+	return rec, nil
 }

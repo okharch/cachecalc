@@ -3,6 +3,7 @@ package cachecalc
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"github.com/lib/pq"
 	_ "github.com/lib/pq" // Import the pq driver
@@ -28,6 +29,7 @@ const (
 	insertIfNotExistQuery = `INSERT INTO postgres_cache_key_value_expired_v_1_4(key, value, expires_at) VALUES($1, $2, $3)`
 	getValueQuery         = `SELECT value FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1 and expires_at > now()`
 	deleteKeyQuery        = `DELETE FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1`
+	deleteKeyValueQuery   = `DELETE FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1 and value = $2`
 
 	dropTriggerQuery  = `DROP TRIGGER IF EXISTS cache_entry_deleted_trigger ON postgres_cache_key_value_expired_v_1_4`
 	dropFunctionQuery = `DROP FUNCTION IF EXISTS notify_cache_entry_deleted`
@@ -200,4 +202,22 @@ func (p *PostgresCache) ExpireEntries(ctx context.Context) chan string {
 	}()
 
 	return ch
+}
+
+func (r *PostgresCache) DelValue(ctx context.Context, key string, value []byte) error {
+	res, err := r.db.ExecContext(ctx, deleteKeyValueQuery, key, value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNoLockFound
+	}
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNoLockFound
+	}
+	return nil
 }

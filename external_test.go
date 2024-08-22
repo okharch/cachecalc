@@ -213,7 +213,6 @@ func TestExternalExpire(t *testing.T) {
 	cc1, cc2 := init2Caches(t, ctx1, initRedisCache(t))
 	keyLock := getKeyLock(key)
 	// just in case, remove the lock before starting
-	// TODO: we need lock to be short lived, so it is automatically removed after some time. if we need it for more time we need to refresh it
 	logger.Printf("forcefully remove the lock %s\n", keyLock)
 	require.NoError(t, cc1.externalCache.Del(ctx1, keyLock))
 	var v1, v2 int
