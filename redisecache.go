@@ -101,8 +101,6 @@ func (r *RedisExternalCache) ExpireEntries(ctx context.Context) chan string {
 		}
 	}()
 
-	time.Sleep(time.Millisecond * 20)
-
 	return ch
 }
 

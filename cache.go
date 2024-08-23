@@ -292,8 +292,7 @@ func (cc *CachedCalculations) pushValue(entry *CacheEntry, r *request, startExpi
 					logger.Printf("thread %v, entry %s context done\n", thread, r.key)
 				}
 			}()
-			wg.Wait()
-			time.Sleep(time.Millisecond) // give time for goroutine to start
+			wg.Wait() // give time for goroutine to start
 		}
 	}
 }
