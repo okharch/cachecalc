@@ -91,7 +91,10 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, entry *CacheEn
 
 // this is used for debug only
 func getEntryValue(entry *CacheEntry, r *request) any {
-	deserialize(entry.Value, r.dest)
+	err := deserialize(entry.Value, r.dest)
+	if err != nil {
+		return fmt.Errorf("failed to deserialize entry.Value: %w", err)
+	}
 	v := reflect.ValueOf(r.dest).Elem()
 	return v
 }
