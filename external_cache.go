@@ -21,6 +21,12 @@ type ExternalCache interface {
 	// keyCreated must return true if the value is set.
 	SetNX(ctx context.Context, key string, value []byte, ttl time.Duration) (keyCreated bool, err error)
 
+	// InitLock initializes the lock for the key, need to reset lock so it becomes available
+	InitLock(ctx context.Context, key string) error
+
+	// GetLock attempts to acquire a distributed lock using the provided ExternalCache.
+	GetLock(ctx context.Context, key string) (releaseLock func() error, err error)
+
 	// Get gets the value of key.
 	// exists will be false if the key does not exist.
 	// An error is returned if the implementor wants to signal any errors.

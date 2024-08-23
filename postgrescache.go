@@ -8,12 +8,15 @@ import (
 	"github.com/lib/pq"
 	_ "github.com/lib/pq" // Import the pq driver
 	"strings"
+	"sync"
 	"time"
 )
 
 type PostgresCache struct {
 	db  *sql.DB
 	dsn string
+	sync.Mutex
+	locks map[string]*sync.Mutex
 }
 
 const (
@@ -90,8 +93,9 @@ func NewPostgresCache(ctx context.Context, dbUrl string) (ExternalCache, error) 
 	}
 
 	p := &PostgresCache{
-		db:  db,
-		dsn: dbUrl,
+		db:    db,
+		dsn:   dbUrl,
+		locks: make(map[string]*sync.Mutex),
 	}
 
 	if err = p.purgeExpired(ctx); err != nil {
@@ -225,5 +229,62 @@ func (r *PostgresCache) DelValue(ctx context.Context, key string, value []byte) 
 	if n == 0 {
 		return ErrNoLockFound
 	}
+	return nil
+}
+
+// GetLock attempts to acquire a distributed lock using pg_advisory_lock.
+func (p *PostgresCache) GetLock(ctx context.Context, key string) (releaseLock func() error, err error) {
+	p.Lock()
+	keyLock, exists := p.locks[key]
+	if !exists {
+		keyLock = &sync.Mutex{}
+		p.locks[key] = keyLock
+	}
+	p.Unlock()
+	// acquire local lock
+	keyLock.Lock()
+	var lockReleased bool
+	// Convert the key to an int64 hash. This is necessary because pg_advisory_lock uses an int64 key.
+	lockKey := hashKey(key)
+
+	// Attempt to acquire the advisory lock.
+	_, err = p.db.ExecContext(ctx, "SELECT pg_advisory_lock($1)", lockKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to acquire lock for key %s: %w", key, err)
+	}
+
+	// Define the function to release the lock.
+	releaseLock = func() error {
+		if lockReleased {
+			return nil
+		}
+		// use timeout context to execute the query
+		ctx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
+		defer cancel()
+		_, err := p.db.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", lockKey)
+		lockReleased = true
+		keyLock.Unlock()
+		if err != nil {
+			return fmt.Errorf("failed to release lock for key %s: %w", key, err)
+		}
+		return nil
+	}
+
+	return releaseLock, nil
+}
+
+// hashKey is a helper function to convert a string key into an int64 hash.
+func hashKey(key string) int64 {
+	var hash int64
+	for _, c := range key {
+		hash = (hash * 31) + int64(c)
+	}
+	return hash
+}
+
+// InitLock is a no-op when using pg_advisory_lock, as no initialization is required.
+func (p *PostgresCache) InitLock(ctx context.Context, key string) error {
+
+	// No initialization needed for pg_advisory_lock
 	return nil
 }

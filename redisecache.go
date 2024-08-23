@@ -134,3 +134,53 @@ func NewRedisCache(ctx context.Context) (ExternalCache, error) {
 	}
 	return rec, nil
 }
+
+const lockToken = "token" // The token value used in the semaphore pattern
+
+// GetLock attempts to acquire a distributed lock using Redis BLPOP/BRPOP with a semaphore pattern.
+func (r *RedisExternalCache) GetLock(ctx context.Context, key string) (releaseLock func() error, err error) {
+	// Define the lock queue key based on the input key
+	lockQueueKey := fmt.Sprintf("lock_queue:%s", key)
+
+	// Attempt to acquire the lock by popping from the lock queue. This will block until a token is available.
+	result, err := r.client.BLPop(ctx, 0, lockQueueKey).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to acquire lock for key %s: %w", key, err)
+	}
+
+	// Ensure the token popped is the expected value (this is a sanity check).
+	if len(result) < 2 || result[1] != lockToken {
+		return nil, fmt.Errorf("unexpected value when acquiring lock for key %s: %v", key, result)
+	}
+
+	// Define the function to release the lock.
+	releaseLock = func() error {
+		// Push the token back into the lock queue to release the lock.
+		err := r.client.RPush(ctx, lockQueueKey, lockToken).Err()
+		if err != nil {
+			return fmt.Errorf("failed to release lock for key %s: %w", key, err)
+		}
+		return nil
+	}
+
+	return releaseLock, nil
+}
+
+// Initialize the lock by pushing the initial token into the lock queue.
+func (r *RedisExternalCache) InitLock(ctx context.Context, key string) error {
+	lockQueueKey := fmt.Sprintf("lock_queue:%s", key)
+	exists, err := r.client.Exists(ctx, lockQueueKey).Result()
+	if err != nil {
+		return fmt.Errorf("failed to check if lock queue exists for key %s: %w", key, err)
+	}
+
+	// If the lock queue doesn't exist, initialize it with one token.
+	if exists == 0 {
+		err := r.client.RPush(ctx, lockQueueKey, lockToken).Err()
+		if err != nil {
+			return fmt.Errorf("failed to initialize lock queue for key %s: %w", key, err)
+		}
+	}
+
+	return nil
+}
