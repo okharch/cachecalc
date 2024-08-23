@@ -9,22 +9,35 @@ import (
 
 var ErrNoLockFound = errors.New("no lock found")
 
-// GetExternalLock tries to set lock using SetNX func of ExternalCache instance
-// it starts a background process that automatically renews the TTL of a lock.
-// it returns an error if the lock is not obtained, and releaseLock function.
-// You must ensure releaseLock is called exactly once in order to release the lock. defer is recommended
+// GetExternalLock attempts to acquire a distributed lock using the provided ExternalCache.
+// It generates a random lock value and continuously attempts to set the lock in the external cache
+// until the lock is obtained or the context is canceled. Once the lock is acquired, a goroutine is
+// started to periodically renew the lock's TTL until the lock is released or the context is canceled.
+//
+// Parameters:
+//   - ctx: The context to manage cancellation and timeouts for acquiring the lock.
+//   - ec: The external cache interface that supports setting and renewing locks.
+//   - key: The key in the external cache that identifies the resource to be locked.
+//
+// Returns:
+//   - releaseLock: A function to release the lock. If called, it will stop the lock renewal goroutine
+//     and attempt to delete the lock from the cache. If the lock is not found during deletion, it
+//     returns an error.
+//   - err: An error if the lock could not be acquired or if there was a failure in generating the lock value.
 func GetExternalLock(ctx context.Context, ec ExternalCache, key string) (releaseLock func() error, err error) {
-	// set lock
+	// Generate the lock key based on the provided key.
 	lockKey := getKeyLock(key)
 	minTTL := time.Second * 10
 	releaseLock = func() error { return nil }
-	// generate some random value for lock
+
+	// Generate a random value for the lock.
 	lockValue := make([]byte, 20)
 	_, err = rand.Read(lockValue)
 	if err != nil {
 		return
 	}
-	// try to set lock until it is obtained or context is cancelled
+
+	// Attempt to set the lock until it is obtained or the context is canceled.
 	for {
 		externalLock, err := ec.SetNX(ctx, lockKey, lockValue, minTTL)
 		if err != nil {
@@ -43,7 +56,7 @@ func GetExternalLock(ctx context.Context, ec ExternalCache, key string) (release
 
 	ctxRelease, cancel := context.WithCancel(ctx)
 
-	// renew lock
+	// Goroutine to periodically renew the lock's TTL.
 	go func() {
 		for {
 			select {
@@ -61,8 +74,8 @@ func GetExternalLock(ctx context.Context, ec ExternalCache, key string) (release
 		}
 	}()
 
+	// Set the release function to cancel the lock renewal and delete the lock from the cache.
 	releaseLock = func() error {
-		// let renew lock goroutine exit
 		cancel()
 		return ec.DelValue(ctx, lockKey, lockValue)
 	}

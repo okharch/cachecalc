@@ -101,3 +101,17 @@ func TestExpirationRedis(t *testing.T) {
 	// init redis external cache
 	testKeyExpiration(t, initRedisCache(t))
 }
+
+func TestRedisDelValue(t *testing.T) {
+	// Run the common test logic
+	runDelValueTest(t, initRedisCache, "test_key", []byte("test_value"))
+}
+
+func TestGetExternalLockRedis(t *testing.T) {
+	logger.Println("TestGetExternalLockRedis...")
+	testGetExternalLock(t, initRedisCache)
+}
+
+func TestGetExternalLockExpiration(t *testing.T) {
+	testGetExternalLockExpiration(t, initRedisCache)
+}

@@ -258,3 +258,39 @@ func TestExternalExpire(t *testing.T) {
 	cancel1()
 	cancel2()
 }
+
+func runDelValueTest(t *testing.T, initCache initCacheFunc, key string, value []byte) {
+	ctx := context.Background()
+
+	ecInit := initCache(t)
+	cache := ecInit(ctx)
+	// Insert a value into the cache
+	err := cache.Set(ctx, key, value, time.Minute)
+	require.NoError(t, err, "Failed to set value")
+
+	// Test deleting the value
+	err = cache.DelValue(ctx, key, value)
+	require.NoError(t, err, "Failed to delete value")
+
+	// Repeat the test to ensure the value is deleted and returns error
+	err = cache.DelValue(ctx, key, value)
+	require.ErrorIs(t, err, ErrNoLockFound, "Expected ErrNoLockFound when deleting value again")
+
+	// Verify that the key no longer exists
+	_, exists, err := cache.Get(ctx, key)
+	require.NoError(t, err, "Failed to get key after deletion")
+	require.False(t, exists, "Expected key to be deleted")
+
+	// Test deleting a non-existing value (should return ErrNoLockFound)
+	err = cache.DelValue(ctx, "non_existing_key", value)
+	require.ErrorIs(t, err, ErrNoLockFound, "Expected ErrNoLockFound when deleting non-existing value")
+
+	// Test deleting a key with an incorrect value (should return ErrNoLockFound)
+	incorrectValue := []byte("incorrect_value")
+	err = cache.DelValue(ctx, key, incorrectValue)
+	require.ErrorIs(t, err, ErrNoLockFound, "Expected ErrNoLockFound when deleting with incorrect value")
+
+	// Ensure the cache is properly closed
+	err = cache.Close()
+	require.NoError(t, err, "Failed to close cache")
+}

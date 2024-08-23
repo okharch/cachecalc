@@ -181,7 +181,10 @@ func (p *PostgresCache) ExpireEntries(ctx context.Context) chan string {
 		logger.Printf("Error setting up listener: %v", err)
 		return nil
 	}
-	defer listener.Close()
+	defer func() {
+		// ignore error on close
+		_ = listener.Close()
+	}()
 
 	go func() {
 		defer close(ch)
@@ -196,7 +199,10 @@ func (p *PostgresCache) ExpireEntries(ctx context.Context) chan string {
 					ch <- notification.Extra
 				}
 			case <-time.After(90 * time.Second):
-				go listener.Ping()
+				go func() {
+					// ignore error
+					_ = listener.Ping()
+				}()
 			}
 		}
 	}()
