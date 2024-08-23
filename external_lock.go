@@ -56,6 +56,12 @@ func GetExternalLock(ctx context.Context, ec ExternalCache, key string) (release
 
 	ctxRelease, cancel := context.WithCancel(ctx)
 
+	// Set the release function to cancel the lock renewal and delete the lock from the cache.
+	releaseLock = func() error {
+		cancel()
+		return ec.DelValue(context.TODO(), lockKey, lockValue)
+	}
+
 	// Goroutine to periodically renew the lock's TTL.
 	go func() {
 		for {
@@ -69,16 +75,16 @@ func GetExternalLock(ctx context.Context, ec ExternalCache, key string) (release
 					logger.Printf("Failed to renew TTL for lock %s: %v", lockKey, err)
 				}
 			case <-ctxRelease.Done():
+				err = releaseLock()
+				if err != nil {
+					logger.Printf("failed to release lock on context cancellation %s: %v", lockKey, err)
+				} else {
+					logger.Printf("lock %s released on context cancellation", lockKey)
+				}
 				return
 			}
 		}
 	}()
-
-	// Set the release function to cancel the lock renewal and delete the lock from the cache.
-	releaseLock = func() error {
-		cancel()
-		return ec.DelValue(ctx, lockKey, lockValue)
-	}
 
 	return releaseLock, nil
 }
