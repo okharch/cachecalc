@@ -58,26 +58,6 @@ func TestPostgresCache(t *testing.T) {
 
 	// Test SetNX
 	newKey := "new_test_key"
-	newValue := []byte("new_test_value")
-
-	created, err := cache.SetNX(ctx, newKey, newValue, time.Second)
-	if err != nil {
-		t.Fatalf("Failed to setNX key: %v", err)
-	}
-
-	if !created {
-		t.Fatalf("Expected key '%s' to be created with value 'new_test_value', but it wasn't.", newKey)
-	}
-
-	// Attempt to create the same key again
-	created, err = cache.SetNX(ctx, newKey, newValue, time.Second)
-	if err != nil {
-		t.Fatalf("Failed to setNX key: %v", err)
-	}
-
-	if created {
-		t.Fatalf("Expected key '%s' to not be created again, but it was.", newKey)
-	}
 
 	// Test Delete
 	err = cache.Del(ctx, key)
@@ -141,11 +121,6 @@ func TestExpirationPostgres(t *testing.T) {
 	logger.Println("TestExpirationRedis...")
 	// init redis external cache
 	testKeyExpiration(t, initPgCache(t))
-}
-
-func TestPostgresDelValue(t *testing.T) {
-	// Run the common test logic
-	runDelValueTest(t, initPgCache, "test_key", []byte("test_value"))
 }
 
 func TestGetExternalLockPostgres(t *testing.T) {

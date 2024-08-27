@@ -42,7 +42,7 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, entry *CacheEn
 	ttl := nzDuration(r.MaxTTL)
 	logger.Printf("thread %v: trying to set external lock %s", thread, lockKey)
 	ec := cc.externalCache
-	lockRelease, err := GetExternalLock(ctx, ec, lockKey)
+	lockRelease, err := ec.GetLock(ctx, lockKey)
 	if err != nil {
 		return fmt.Errorf("thread %v: failed to obtain external lock %s: %w", thread, lockKey, err)
 	}

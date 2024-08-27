@@ -14,13 +14,6 @@ type ExternalCache interface {
 	// Should return nil if successful.
 	Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
 
-	// SetNX sets key to hold string value if key does not exist.
-	// In that case, it is equivalent to SET.
-	// When key already holds a value, no operation is performed.
-	// SETNX is short for "SET if Not eXists".
-	// keyCreated must return true if the value is set.
-	SetNX(ctx context.Context, key string, value []byte, ttl time.Duration) (keyCreated bool, err error)
-
 	// InitLock initializes the lock for the key, need to reset lock so it becomes available
 	InitLock(ctx context.Context, key string) error
 
@@ -34,9 +27,6 @@ type ExternalCache interface {
 
 	// Del removes the specified key. A key is ignored if it does not exist.
 	Del(ctx context.Context, key string) error
-
-	// DelValue removes the specified value from the key. Otherwise returns error. It is used to release particular lock
-	DelValue(ctx context.Context, key string, value []byte) error
 
 	// Close closes the connection to the external cache.
 	Close() error

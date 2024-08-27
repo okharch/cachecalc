@@ -3,11 +3,9 @@ package cachecalc
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"github.com/lib/pq"
 	_ "github.com/lib/pq" // Import the pq driver
-	"strings"
 	"sync"
 	"time"
 )
@@ -126,26 +124,6 @@ func (p *PostgresCache) Set(ctx context.Context, key string, value []byte, ttl t
 	return err
 }
 
-func (p *PostgresCache) SetNX(ctx context.Context, key string, value []byte, ttl time.Duration) (keyCreated bool, err error) {
-	if err = p.purgeExpired(ctx); err != nil {
-		return
-	}
-	fixTTL := nzDuration(ttl)
-	expiresAt := time.Now().Add(fixTTL).UTC()
-	_, err = p.db.ExecContext(ctx, insertIfNotExistQuery, key, value, expiresAt)
-
-	if err != nil {
-		msg := err.Error()
-		if strings.Contains(msg, "unique constraint") || strings.Contains(msg, "duplicate key") {
-			return false, nil
-		}
-		return false, err
-	}
-	thread := getThread(ctx)
-	logger.Printf("thread %v: %s=%x expires in %dms", thread, key, value, fixTTL.Milliseconds())
-	return true, nil
-}
-
 func (p *PostgresCache) Get(ctx context.Context, key string) (value []byte, exists bool, err error) {
 	err = p.db.QueryRowContext(ctx, getValueQuery, key).Scan(&value)
 	if err == sql.ErrNoRows {
@@ -212,24 +190,6 @@ func (p *PostgresCache) ExpireEntries(ctx context.Context) chan string {
 	}()
 
 	return ch
-}
-
-func (r *PostgresCache) DelValue(ctx context.Context, key string, value []byte) error {
-	res, err := r.db.ExecContext(ctx, deleteKeyValueQuery, key, value)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrNoLockFound
-	}
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrNoLockFound
-	}
-	return nil
 }
 
 // GetLock attempts to acquire a distributed lock using pg_advisory_lock.

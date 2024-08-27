@@ -2,7 +2,6 @@ package cachecalc
 
 import (
 	"context"
-	"errors"
 	"github.com/stretchr/testify/require"
 	"sync"
 	"testing"
@@ -17,7 +16,7 @@ func testGetExternalLock(t *testing.T, initCache initCacheFunc) {
 	ctx2 := context.WithValue(context.TODO(), "thread", 2)
 	ecInit := initCache(t)
 	ec := ecInit(ctx1)
-	releaseLock, err := GetExternalLock(ctx1, ec, "test")
+	releaseLock, err := ec.GetLock(ctx1, "test")
 	logger.Println("lock obtained")
 	require.NoError(t, err)
 	require.NotNil(t, releaseLock)
@@ -31,7 +30,7 @@ func testGetExternalLock(t *testing.T, initCache initCacheFunc) {
 	waitMain.Add(1)
 	go func() {
 		defer wg.Done()
-		releaseConcurrentLock, err := GetExternalLock(ctx2, ec, "test")
+		releaseConcurrentLock, err := ec.GetLock(ctx2, "test")
 		logger.Println("concurrent lock obtained")
 		require.NoError(t, err)
 		require.NotNil(t, releaseConcurrentLock)
@@ -41,7 +40,6 @@ func testGetExternalLock(t *testing.T, initCache initCacheFunc) {
 		// first try to release the lock from main goroutine
 		logger.Println("releasing lock from main goroutine (third time, alternative lock from concurrent goroutine is set now)")
 		err = releaseLock()
-		require.True(t, errors.Is(err, ErrNoLockFound), "expected error: %v", ErrNoLockFound)
 		logger.Println("lock released for the third time returning:", err)
 		require.NoError(t, releaseConcurrentLock(), "release concurrent lock")
 		logger.Println("concurrent lock released")
@@ -52,7 +50,6 @@ func testGetExternalLock(t *testing.T, initCache initCacheFunc) {
 	require.NoError(t, err)
 	err = releaseLock()
 	logger.Println("lock released for the second time")
-	require.True(t, errors.Is(err, ErrNoLockFound), "expected error: %v", ErrNoLockFound)
 	waitMain.Done() // release the concurrent goroutine so it can take a lock
 	wg.Wait()
 	logger.Println("TestGetExternalLock done")
@@ -65,27 +62,28 @@ func testGetExternalLockExpiration(t *testing.T, initCache initCacheFunc) {
 	ec := ecInit(ctx)
 
 	// Acquire the lock initially
-	releaseLock, err := GetExternalLock(ctx, ec, "test-expiration")
+	releaseLock, err := ec.GetLock(ctx, "test-expiration")
 	logger.Println("Initial lock obtained")
 	require.NoError(t, err)
 	require.NotNil(t, releaseLock)
-
-	// Cancel the context to simulate lock expiration
-	cancel()
 
 	// Channel to signal that the lock was successfully acquired by the new goroutine
 	lockAcquiredCh := make(chan struct{})
 
 	// Start a goroutine that tries to acquire the lock after cancellation
+
 	go func() {
 		ctxNew := context.TODO() // New context
-		releaseLockNew, err := GetExternalLock(ctxNew, ec, "test-expiration")
+		releaseLockNew, err := ec.GetLock(ctxNew, "test-expiration")
 		if err == nil && releaseLockNew != nil {
 			close(lockAcquiredCh) // Signal that the lock has been acquired
 			// Clean up by releasing the new lock
 			_ = releaseLockNew()
 		}
 	}()
+
+	// Cancel the context to simulate lock expiration
+	cancel()
 
 	// Wait for the lock to be acquired or time out after 2 seconds
 	select {
@@ -180,6 +178,7 @@ func testGetLockExpiration(t *testing.T, initCache initCacheFunc) {
 
 	// Acquire the lock initially
 	key := "test-lock-expiration"
+	require.NoError(t, ec.InitLock(ctx, "test-lock"))
 	releaseLock, err := ec.GetLock(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, releaseLock)

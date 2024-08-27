@@ -3,6 +3,8 @@ package cachecalc
 import (
 	"context"
 	"crypto/rand"
+	"github.com/go-redis/redis/v8"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"log"
 	"sync"
@@ -81,7 +83,6 @@ func TestExternalCacheRedis(t *testing.T) {
 	log.Println("TestExternalCacheRedis...")
 	ctx := context.TODO()
 	testExternalCache(t, ctx, initRedisCache(t))
-
 }
 
 func TestRemoteRedis(t *testing.T) {
@@ -102,11 +103,6 @@ func TestExpirationRedis(t *testing.T) {
 	testKeyExpiration(t, initRedisCache(t))
 }
 
-func TestRedisDelValue(t *testing.T) {
-	// Run the common test logic
-	runDelValueTest(t, initRedisCache, "test_key", []byte("test_value"))
-}
-
 func TestGetExternalLockRedis(t *testing.T) {
 	logger.Println("TestGetExternalLockRedis...")
 	testGetExternalLock(t, initRedisCache)
@@ -114,4 +110,118 @@ func TestGetExternalLockRedis(t *testing.T) {
 
 func TestGetExternalLockExpiration(t *testing.T) {
 	testGetExternalLockExpiration(t, initRedisCache)
+}
+
+func TestRedisLPop(t *testing.T) {
+	ctx := context.Background()
+
+	// Initialize Redis client
+	client, err := GetRedis(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, client)
+
+	// Define the key to use for testing
+	lockQueueKey := "lock_queue:test-lock"
+
+	// Ensure the key is clean before starting the test
+	client.Del(ctx, lockQueueKey)
+
+	// Step 1: Verify the list is empty (start from here)
+	values, err := client.LRange(ctx, lockQueueKey, 0, -1).Result()
+	assert.NoError(t, err)
+	assert.Empty(t, values)
+
+	// Case 1: Queue is already empty
+	// Step 2: Attempt to pop from the empty list
+	result, err := client.LPop(ctx, lockQueueKey).Result()
+	assert.Equal(t, redis.Nil, err)
+	assert.Equal(t, "", result)
+
+	// Case 2: Push a token to the list and pop it
+	// Step 3: Push a token to the list
+	err = client.RPush(ctx, lockQueueKey, "token").Err()
+	assert.NoError(t, err)
+
+	// Step 4: Verify the list content
+	length, err := client.LLen(ctx, lockQueueKey).Result()
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1), length)
+
+	values, err = client.LRange(ctx, lockQueueKey, 0, -1).Result()
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"token"}, values)
+
+	// Step 5: Pop the token from the list
+	result, err = client.LPop(ctx, lockQueueKey).Result()
+	assert.NoError(t, err)
+	assert.Equal(t, "token", result)
+
+	// Step 6: Verify the list is empty after popping
+	length, err = client.LLen(ctx, lockQueueKey).Result()
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), length)
+
+	values, err = client.LRange(ctx, lockQueueKey, 0, -1).Result()
+	assert.NoError(t, err)
+	assert.Empty(t, values)
+
+	// Clean up the key
+	client.Del(ctx, lockQueueKey)
+}
+
+func TestRedisBLPop(t *testing.T) {
+	ctx := context.Background()
+
+	// Initialize Redis client
+	client, err := GetRedis(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, client)
+
+	// Define the key to use for testing
+	lockQueueKey := "lock_queue:test-lock"
+
+	// Ensure the key is clean before starting the test
+	client.Del(ctx, lockQueueKey)
+
+	// Step 1: Verify the list is empty (start from here)
+	values, err := client.LRange(ctx, lockQueueKey, 0, -1).Result()
+	assert.NoError(t, err)
+	assert.Empty(t, values)
+
+	// Case 1: Queue is already empty
+	logger.Println("Attempt to block pop from the empty list. Will wait for 1s timeout")
+	result, err := client.BLPop(ctx, time.Second, lockQueueKey).Result()
+	assert.Equal(t, redis.Nil, err)
+	assert.Empty(t, result)
+
+	// Case 2: Push a token to the list and block pop it
+	// Step 3: Push a token to the list
+	err = client.RPush(ctx, lockQueueKey, "token").Err()
+	assert.NoError(t, err)
+
+	// Step 4: Verify the list content
+	length, err := client.LLen(ctx, lockQueueKey).Result()
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1), length)
+
+	values, err = client.LRange(ctx, lockQueueKey, 0, -1).Result()
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"token"}, values)
+
+	// Step 5: Block pop the token from the list with a 1-second timeout
+	result, err = client.BLPop(ctx, 1*time.Second, lockQueueKey).Result()
+	assert.NoError(t, err)
+	assert.Equal(t, []string{lockQueueKey, "token"}, result)
+
+	// Step 6: Verify the list is empty after popping
+	length, err = client.LLen(ctx, lockQueueKey).Result()
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), length)
+
+	values, err = client.LRange(ctx, lockQueueKey, 0, -1).Result()
+	assert.NoError(t, err)
+	assert.Empty(t, values)
+
+	// Clean up the key
+	client.Del(ctx, lockQueueKey)
 }

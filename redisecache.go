@@ -38,10 +38,6 @@ func (r *RedisExternalCache) Set(ctx context.Context, key string, value []byte, 
 	return r.client.Set(ctx, key, value, ttl).Err()
 }
 
-func (r *RedisExternalCache) SetNX(ctx context.Context, key string, value []byte, ttl time.Duration) (bool, error) {
-	return r.client.SetNX(ctx, key, value, ttl).Result()
-}
-
 func (r *RedisExternalCache) Get(ctx context.Context, key string) (value []byte, exists bool, err error) {
 	cmd := r.client.Get(ctx, key)
 	err = cmd.Err()
@@ -104,25 +100,6 @@ func (r *RedisExternalCache) ExpireEntries(ctx context.Context) chan string {
 	return ch
 }
 
-func (r *RedisExternalCache) DelValue(ctx context.Context, key string, value []byte) error {
-	script := redis.NewScript(`
-		local current = redis.call('GET', KEYS[1])
-		if current == ARGV[1] then
-			return redis.call('DEL', KEYS[1])
-		else
-			return 0
-		end
-	`)
-	ret, err := script.Run(ctx, r.client, []string{key}, value).Result()
-	if err != nil {
-		return err
-	}
-	if ret == int64(0) {
-		return ErrNoLockFound
-	}
-	return nil
-}
-
 // NewRedisCache creates an instance of ExternalCache connected to ENV{REDIS_URL} or local redis server if not specified.
 func NewRedisCache(ctx context.Context) (ExternalCache, error) {
 	client, err := GetRedis(ctx)
@@ -143,15 +120,22 @@ func (r *RedisExternalCache) GetLock(ctx context.Context, key string) (releaseLo
 	lockQueueKey := fmt.Sprintf("lock_queue:%s", key)
 
 	// Attempt to acquire the lock by popping from the lock queue. This will block until a token is available.
-	result, err := r.client.BLPop(ctx, 0, lockQueueKey).Result()
-	if err != nil {
-		return nil, fmt.Errorf("failed to acquire lock for key %s: %w", key, err)
+	for {
+		result, err := r.client.BLPop(ctx, time.Second*10, lockQueueKey).Result()
+		if errors.Is(err, redis.Nil) {
+			logger.Printf("Attempt to block pop from the empty list. Will wait for 10s timeout")
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to acquire lock for key %s: %w", key, err)
+		}
+		// Ensure the token popped is the expected value (this is a sanity check).
+		if len(result) < 2 || result[1] != lockToken {
+			return nil, fmt.Errorf("unexpected value when acquiring lock for key %s: %v", key, result)
+		}
+		break
 	}
-
-	// Ensure the token popped is the expected value (this is a sanity check).
-	if len(result) < 2 || result[1] != lockToken {
-		return nil, fmt.Errorf("unexpected value when acquiring lock for key %s: %v", key, result)
-	}
+	logger.Printf("redis lock %s acquired", key)
 
 	ctxUnlock, cancel := context.WithCancel(ctx)
 	// Define the function to release the lock.
@@ -165,6 +149,7 @@ func (r *RedisExternalCache) GetLock(ctx context.Context, key string) (releaseLo
 		ctx, cancelUnlock := context.WithTimeout(context.TODO(), 5*time.Second)
 		defer cancelUnlock()
 		err := r.client.RPush(ctx, lockQueueKey, lockToken).Err()
+		logger.Printf("redis lock %s released", key)
 		lockReleased = true
 		cancel() // cancel the context to stop the goroutine
 		if err != nil {
@@ -185,11 +170,25 @@ func (r *RedisExternalCache) InitLock(ctx context.Context, key string) error {
 		return fmt.Errorf("failed to check if lock queue exists for key %s: %w", key, err)
 	}
 
-	// If the lock queue doesn't exist, initialize it with one token.
 	if exists == 0 {
+		// Initialize the lock queue if it doesn't exist.
 		err := r.client.RPush(ctx, lockQueueKey, lockToken).Err()
 		if err != nil {
 			return fmt.Errorf("failed to initialize lock queue for key %s: %w", key, err)
+		}
+	} else {
+		// Optional: Ensure the queue has the correct token.
+		tokenCount, err := r.client.LLen(ctx, lockQueueKey).Result()
+		if err != nil {
+			return fmt.Errorf("failed to check lock queue length for key %s: %w", key, err)
+		}
+
+		if tokenCount == 0 {
+			// Reinitialize the lock queue if it's empty.
+			err := r.client.RPush(ctx, lockQueueKey, lockToken).Err()
+			if err != nil {
+				return fmt.Errorf("failed to reinitialize lock queue for key %s: %w", key, err)
+			}
 		}
 	}
 
