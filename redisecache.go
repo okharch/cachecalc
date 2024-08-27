@@ -153,15 +153,26 @@ func (r *RedisExternalCache) GetLock(ctx context.Context, key string) (releaseLo
 		return nil, fmt.Errorf("unexpected value when acquiring lock for key %s: %v", key, result)
 	}
 
+	ctxUnlock, cancel := context.WithCancel(ctx)
 	// Define the function to release the lock.
+	var lockReleased bool
 	releaseLock = func() error {
+		if lockReleased {
+			return nil
+		}
 		// Push the token back into the lock queue to release the lock.
+		// use timeout context to execute the query
+		ctx, cancelUnlock := context.WithTimeout(context.TODO(), 5*time.Second)
+		defer cancelUnlock()
 		err := r.client.RPush(ctx, lockQueueKey, lockToken).Err()
+		lockReleased = true
+		cancel() // cancel the context to stop the goroutine
 		if err != nil {
 			return fmt.Errorf("failed to release lock for key %s: %w", key, err)
 		}
 		return nil
 	}
+	go releaseLockOnContextCancel(ctxUnlock, releaseLock)
 
 	return releaseLock, nil
 }

@@ -98,3 +98,8 @@ func getEntryValue(entry *CacheEntry, r *request) any {
 	v := reflect.ValueOf(r.dest).Elem()
 	return v
 }
+
+func releaseLockOnContextCancel(ctx context.Context, releaseLock func() error) {
+	<-ctx.Done()
+	_ = releaseLock()
+}

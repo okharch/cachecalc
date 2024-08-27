@@ -253,22 +253,27 @@ func (p *PostgresCache) GetLock(ctx context.Context, key string) (releaseLock fu
 		return nil, fmt.Errorf("failed to acquire lock for key %s: %w", key, err)
 	}
 
+	ctxUnlock, cancel := context.WithCancel(ctx)
+
 	// Define the function to release the lock.
 	releaseLock = func() error {
 		if lockReleased {
 			return nil
 		}
 		// use timeout context to execute the query
-		ctx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
-		defer cancel()
+		ctx, cancelUnlock := context.WithTimeout(context.TODO(), 5*time.Second)
+		defer cancelUnlock()
 		_, err := p.db.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", lockKey)
 		lockReleased = true
 		keyLock.Unlock()
+		cancel() // cancel the context to stop the goroutine
 		if err != nil {
 			return fmt.Errorf("failed to release lock for key %s: %w", key, err)
 		}
 		return nil
 	}
+
+	go releaseLockOnContextCancel(ctxUnlock, releaseLock)
 
 	return releaseLock, nil
 }

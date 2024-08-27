@@ -179,7 +179,8 @@ func testGetLockExpiration(t *testing.T, initCache initCacheFunc) {
 	ec := ecInit(ctx)
 
 	// Acquire the lock initially
-	releaseLock, err := ec.GetLock(ctx, "test-lock-expiration")
+	key := "test-lock-expiration"
+	releaseLock, err := ec.GetLock(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, releaseLock)
 
@@ -192,7 +193,7 @@ func testGetLockExpiration(t *testing.T, initCache initCacheFunc) {
 	// Start a goroutine that tries to acquire the lock after cancellation
 	go func() {
 		ctxNew := context.TODO() // New context
-		releaseLockNew, err := ec.GetLock(ctxNew, "test-lock-expiration")
+		releaseLockNew, err := ec.GetLock(ctxNew, key)
 		if err == nil && releaseLockNew != nil {
 			close(lockAcquiredCh) // Signal that the lock has been acquired
 			// Clean up by releasing the new lock
@@ -227,5 +228,6 @@ func TestPostgresCache_GetLockExpiration(t *testing.T) {
 }
 
 func TestRedisExternalCache_GetLockExpiration(t *testing.T) {
+	logger.Println("TestRedisExternalCache_GetLockExpiration...")
 	testGetLockExpiration(t, initRedisCache)
 }
