@@ -126,6 +126,13 @@ func TestRedisLPop(t *testing.T) {
 	// Ensure the key is clean before starting the test
 	client.Del(ctx, lockQueueKey)
 
+	// Check if the list exists or has elements before attempting to BLPop
+	listExists, err := client.Exists(ctx, lockQueueKey).Result()
+	require.NoError(t, err)
+	require.Equal(t, int64(0), listExists)
+
+	logger.Printf("lock queue for key %s exists: %v", lockQueueKey, listExists)
+
 	// Step 1: Verify the list is empty (start from here)
 	values, err := client.LRange(ctx, lockQueueKey, 0, -1).Result()
 	assert.NoError(t, err)
@@ -142,6 +149,11 @@ func TestRedisLPop(t *testing.T) {
 	err = client.RPush(ctx, lockQueueKey, "token").Err()
 	assert.NoError(t, err)
 
+	listExists, err = client.Exists(ctx, lockQueueKey).Result()
+	require.NoError(t, err)
+	logger.Printf("lock queue for key %s exists: %v", lockQueueKey, listExists)
+	require.Equal(t, int64(1), listExists)
+
 	// Step 4: Verify the list content
 	length, err := client.LLen(ctx, lockQueueKey).Result()
 	assert.NoError(t, err)
@@ -155,6 +167,11 @@ func TestRedisLPop(t *testing.T) {
 	result, err = client.LPop(ctx, lockQueueKey).Result()
 	assert.NoError(t, err)
 	assert.Equal(t, "token", result)
+
+	listExists, err = client.Exists(ctx, lockQueueKey).Result()
+	require.NoError(t, err)
+	logger.Printf("lock queue for key %s exists: %v", lockQueueKey, listExists)
+	require.Equal(t, int64(1), listExists)
 
 	// Step 6: Verify the list is empty after popping
 	length, err = client.LLen(ctx, lockQueueKey).Result()

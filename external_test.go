@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+const remoteTick = time.Millisecond * 100
+const remoteRefresh = remoteTick * 3
+const remoteExpire = remoteTick * 10
+
 func init2Caches(t *testing.T, ctx context.Context, initExternalCache func(ctx context.Context) ExternalCache) (sc1, sc2 *CachedCalculations) {
 	logger.Println("init 2(two) cached calculations")
 	ec1 := initExternalCache(ctx)
@@ -25,26 +29,31 @@ func testRemote(t *testing.T, ctx context.Context, initExternalCache func(ctx co
 	var d1, d2, d3 int
 	var wg sync.WaitGroup
 	key := getRandomKey(t)
-	GetI1 := initCalcTest(t, &wg, cc1, key)
-	GetI2 := initCalcTest(t, &wg, cc2, key)
+	GetI1 := initCalcTest(t, &wg, cc1, key, remoteTick, remoteRefresh, remoteExpire)
+	GetI2 := initCalcTest(t, &wg, cc2, key, remoteTick, remoteRefresh, remoteExpire)
 	// make sure we remove the lock - could be left from previous sessions
 	wg.Add(3)
+	logger.Println("getting first values using thread 1")
 	GetI1(&d1, 1)
+	logger.Println("getting cached value using thread 2")
 	GetI2(&d2, 2)
+	logger.Println("getting cached value using thread 3")
 	GetI2(&d3, 3)
 	wg.Wait()
+	// all should return 1
 	require.Equal(t, 1, d1)
 	require.Equal(t, 1, d2)
 	require.Equal(t, 1, d3)
 	// force refresh
 	wg.Add(3)
-	time.Sleep(refresh + tick)
+	logger.Println("force refresh by sleep for", remoteRefresh+remoteTick)
+	time.Sleep(remoteRefresh + remoteTick)
+	logger.Println("getting cached value using thread 4, shall return cached value but start background refresh")
 	GetI2(&d1, 4) // should still return old value but run refresh calculations
 	require.Equal(t, 1, d1)
-	time.Sleep(tick) // need to wait here to give time for 4 for taking lock and starting calculations
-	GetI1(&d2, 5)    // still old value as calculations take time
+	GetI2(&d2, 5) // still old value as calculations take time
 	require.Equal(t, 1, d2)
-	time.Sleep(tick) // now it should be ready
+	time.Sleep(remoteTick * 2) // now it should be ready
 	GetI2(&d3, 6)
 	require.Equal(t, 2, d3)
 	wg.Wait()
@@ -110,8 +119,8 @@ func testRemoteConcurrent(t *testing.T, ctx context.Context, initExternalCache f
 	var d1, d2, d3 int
 	var wg sync.WaitGroup
 	key := getRandomKey(t)
-	GetI1 := initCalcTest(t, &wg, cc1, key)
-	GetI2 := initCalcTest(t, &wg, cc2, key)
+	GetI1 := initCalcTest(t, &wg, cc1, key, remoteTick, remoteRefresh, remoteExpire)
+	GetI2 := initCalcTest(t, &wg, cc2, key, remoteTick, remoteRefresh, remoteExpire)
 	wg.Add(3)
 	go GetI1(&d1, 1)
 	go GetI2(&d2, 2)
@@ -120,19 +129,19 @@ func testRemoteConcurrent(t *testing.T, ctx context.Context, initExternalCache f
 	require.Equal(t, 1, d1)
 	require.Equal(t, 1, d2)
 	require.Equal(t, 1, d3)
-	time.Sleep(refresh + tick)
-	logger.Printf("force refresh by sleep for %v", refresh)
+	logger.Printf("force refresh by sleep for %v", remoteRefresh+remoteTick)
+	time.Sleep(remoteRefresh + remoteTick) // give time to refresh
 	wg.Add(3)
 	go GetI2(&d1, 4)
 	require.Equal(t, 1, d1)
 	go GetI1(&d2, 5)
 	require.Equal(t, 1, d2)
 	logger.Printf("hold thread 6 so refreshed value will be available")
-	time.Sleep(tick * 3) // give time to be refreshed
+	time.Sleep(remoteTick * 3) // give time to be refreshed
 	go GetI1(&d3, 6)
 	wg.Wait()
 	// still previous call might return local value instead of refreshed remote, so lets wait and ask again, it had to refresh
-	time.Sleep(tick * 3) // give time to be refreshed
+	time.Sleep(remoteTick * 3) // give time to be refreshed
 	wg.Add(1)
 	// previous time
 	GetI1(&d3, 7)

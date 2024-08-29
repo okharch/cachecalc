@@ -2,6 +2,7 @@ package cachecalc
 
 import (
 	"context"
+	"fmt"
 	"github.com/stretchr/testify/require"
 	"sync"
 	"testing"
@@ -16,6 +17,7 @@ func testGetExternalLock(t *testing.T, initCache initCacheFunc) {
 	ctx2 := context.WithValue(context.TODO(), "thread", 2)
 	ecInit := initCache(t)
 	ec := ecInit(ctx1)
+	logger.Println("trying to obtain lock thread 1...")
 	releaseLock, err := ec.GetLock(ctx1, "test")
 	logger.Println("lock obtained")
 	require.NoError(t, err)
@@ -96,15 +98,15 @@ func testGetExternalLockExpiration(t *testing.T, initCache initCacheFunc) {
 	logger.Println("TestGetExternalLockExpiration done")
 }
 
-func testGetLock(t *testing.T, initCache initCacheFunc) {
+func testGetLock1(t *testing.T, initCache initCacheFunc) {
 	ctx1 := context.WithValue(context.TODO(), "thread", 1)
 	ctx2 := context.WithValue(context.TODO(), "thread", 2)
 
 	ec1 := initCache(t)(ctx1)
 	ec2 := initCache(t)(ctx2)
 
-	require.NoError(t, ec1.InitLock(ctx1, "test-lock"))
-	require.NoError(t, ec2.InitLock(ctx2, "test-lock"))
+	//require.NoError(t, ec1.InitLock(ctx1, "test-lock"))
+	//require.NoError(t, ec2.InitLock(ctx2, "test-lock"))
 
 	logger.Println("*** Test concurrent locks with the same cache")
 	runTestLocks(t, ec1, ec1, ctx1, ctx2) // Test with the same cache
@@ -113,7 +115,11 @@ func testGetLock(t *testing.T, initCache initCacheFunc) {
 }
 
 func runTestLocks(t *testing.T, ec1, ec2 ExternalCache, ctx1, ctx2 context.Context) {
-	releaseLock := acquireLock(t, ec1, ctx1, "test-lock", "main thread")
+	const testKey = "test-lock"
+	for _, key := range []string{testKey, fmt.Sprintf("lock_queue:%s", testKey)} {
+		require.NoError(t, ec1.Del(ctx1, key)) // forcefully remove the lock before starting
+	}
+	releaseLock := acquireLock(t, ec1, ctx1, testKey, "main thread")
 
 	testValue := 1
 	var tvLock sync.Mutex
@@ -140,15 +146,15 @@ func runTestLocks(t *testing.T, ec1, ec2 ExternalCache, ctx1, ctx2 context.Conte
 	go func() {
 		defer wg.Done()
 		waitLock.Done()
-		releaseConcurrentLock := acquireLock(t, ec2, ctx2, "test-lock", "concurrent thread")
+		releaseConcurrentLock := acquireLock(t, ec2, ctx2, testKey, "concurrent thread")
 		incTestValue()
 		logger.Println("test value incremented by concurrent thread")
-		releaseConcurrentLock()
+		require.NoError(t, releaseConcurrentLock())
 		logger.Println("concurrent lock released")
 	}()
 
 	waitLock.Wait()
-	time.Sleep(tick)
+	time.Sleep(remoteTick)
 	require.Equal(t, 1, getTestValue(), "test value shall be 1")
 
 	require.NoError(t, releaseLock())
@@ -178,7 +184,6 @@ func testGetLockExpiration(t *testing.T, initCache initCacheFunc) {
 
 	// Acquire the lock initially
 	key := "test-lock-expiration"
-	require.NoError(t, ec.InitLock(ctx, "test-lock"))
 	releaseLock, err := ec.GetLock(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, releaseLock)

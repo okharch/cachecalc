@@ -18,8 +18,8 @@ func init() {
 	logger = log.New(os.Stderr, "", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
 }
 
-const refresh = tick * 5 // calc gets 2 ticks, minTTL is aligned to 4 ticks according to that
-const expire = tick * 20
+const refresh = tick * 20 // calc gets 2 ticks, minTTL is aligned to 4 ticks according to that
+const expire = tick * 50
 
 var counter int
 var mu sync.Mutex
@@ -45,7 +45,7 @@ The returned function does the following:
 4. Defines the main function `GetI` which performs the cached calculation and updates the result.
 5. `GetI` also uses the WaitGroup to signal the completion of the goroutine.
 */
-func initCalcTest(t *testing.T, wg *sync.WaitGroup, cc *CachedCalculations, key string) func(result *int, thread int) {
+func initCalcTest(t *testing.T, wg *sync.WaitGroup, cc *CachedCalculations, key string, tick, refresh, expire time.Duration) func(result *int, thread int) {
 	counter = 0
 	ctx := context.TODO()
 	logger.Printf("init calculations")
@@ -56,10 +56,12 @@ func initCalcTest(t *testing.T, wg *sync.WaitGroup, cc *CachedCalculations, key 
 		require.NoError(t, err)
 	}
 	getI := func(ctx context.Context) (int, error) {
+		logger.Println("calculation in thread ", ctx.Value("thread"))
 		time.Sleep(tick)
 		mu.Lock()
 		counter++
 		mu.Unlock()
+		logger.Println("calculation completed in thread ", ctx.Value("thread"), "result ", counter)
 		return counter, nil
 	}
 	GetI := func(result *int, thread int) {
@@ -108,7 +110,7 @@ func TestLocalSimple(t *testing.T) {
 	var wg sync.WaitGroup
 	ctx, cancel := context.WithCancel(context.TODO())
 	cc := NewCachedCalculations(ctx, nil, 4)
-	GetI := initCalcTest(t, &wg, cc, getRandomKey(t))
+	GetI := initCalcTest(t, &wg, cc, getRandomKey(t), tick, refresh, expire)
 	wg.Add(nThreads)
 	dest := make([]int, nThreads)
 	for i := 0; i < nThreads; i++ {
@@ -131,7 +133,7 @@ func TestLocal(t *testing.T) {
 	var wg sync.WaitGroup
 	ctx, cancel := context.WithCancel(context.TODO())
 	cc := NewCachedCalculations(ctx, nil, 4)
-	GetI := initCalcTest(t, &wg, cc, getRandomKey(t))
+	GetI := initCalcTest(t, &wg, cc, getRandomKey(t), tick, refresh, expire)
 	wg.Add(4)
 	GetI(&d1, 1)
 	require.Equal(t, 1, d1)

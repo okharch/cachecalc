@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/go-redis/redis/v8"
+	redislock "github.com/jefferyjob/go-redis-lock"
 	"os"
 	"time"
 )
@@ -31,7 +32,8 @@ func GetRedis(ctx context.Context) (*redis.Client, error) {
 }
 
 type RedisExternalCache struct {
-	client *redis.Client
+	client    *redis.Client
+	redisLock *redislock.RedisLock
 }
 
 func (r *RedisExternalCache) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
@@ -53,6 +55,7 @@ func (r *RedisExternalCache) Get(ctx context.Context, key string) (value []byte,
 }
 
 func (r *RedisExternalCache) Del(ctx context.Context, key string) error {
+	logger.Printf("redis: deleting key %s", key)
 	return r.client.Del(ctx, key).Err()
 }
 
@@ -118,9 +121,38 @@ const lockToken = "token" // The token value used in the semaphore pattern
 func (r *RedisExternalCache) GetLock(ctx context.Context, key string) (releaseLock func() error, err error) {
 	// Define the lock queue key based on the input key
 	lockQueueKey := fmt.Sprintf("lock_queue:%s", key)
+	lockFlagKey := fmt.Sprintf("lock_flag:%s", key)
+
+	// Check if the lock queue was ever initialized
+	flagExists, err := r.client.Exists(ctx, lockFlagKey).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to check lock flag for key %s: %w", lockFlagKey, err)
+	}
+	logger.Printf("redis lock %s flag exists: %v", lockFlagKey, flagExists)
+
+	// Initialize the lock queue if it was never initialized
+	if flagExists == 0 {
+		// Set the flag to indicate the lock queue has been initialized
+		logger.Printf("initialize lock flag for key %s via SETNX", lockFlagKey)
+		created, err := r.client.SetNX(ctx, lockFlagKey, 1, time.Hour).Result() // No expiration for the flag
+		if err != nil {
+			return nil, fmt.Errorf("failed to set lock flag for key %s: %w", lockFlagKey, err)
+		}
+		logger.Printf("redis lock %s flag created: %v", lockFlagKey, created)
+
+		// Push an initial token to the queue to initialize it
+		if created {
+			logger.Printf("initialize lock queue for key %s by pushing initial token", lockQueueKey)
+			err = r.client.RPush(ctx, lockQueueKey, "initialToken").Err()
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize lock queue for key %s: %w", key, err)
+		}
+	}
 
 	// Attempt to acquire the lock by popping from the lock queue. This will block until a token is available.
 	for {
+		logger.Printf("attempt to acquire lock for key %s by BLPOP, timeout 10s", key)
 		result, err := r.client.BLPop(ctx, time.Second*10, lockQueueKey).Result()
 		if errors.Is(err, redis.Nil) {
 			logger.Printf("Attempt to block pop from the empty list. Will wait for 10s timeout")
@@ -129,9 +161,14 @@ func (r *RedisExternalCache) GetLock(ctx context.Context, key string) (releaseLo
 		if err != nil {
 			return nil, fmt.Errorf("failed to acquire lock for key %s: %w", key, err)
 		}
-		// Ensure the token popped is the expected value (this is a sanity check).
-		if len(result) < 2 || result[1] != lockToken {
-			return nil, fmt.Errorf("unexpected value when acquiring lock for key %s: %v", key, result)
+		// Ensure the token popped is not the initial token (sanity check).
+		if len(result) < 2 || result[1] == "initialToken" {
+			// Push the initial token back into the queue and continue waiting
+			err = r.client.RPush(ctx, lockQueueKey, "initialToken").Err()
+			if err != nil {
+				return nil, fmt.Errorf("failed to restore initial token for key %s: %w", key, err)
+			}
+			continue
 		}
 		break
 	}
@@ -145,13 +182,13 @@ func (r *RedisExternalCache) GetLock(ctx context.Context, key string) (releaseLo
 			return nil
 		}
 		// Push the token back into the lock queue to release the lock.
-		// use timeout context to execute the query
+		// Use timeout context to execute the query
 		ctx, cancelUnlock := context.WithTimeout(context.TODO(), 5*time.Second)
 		defer cancelUnlock()
-		err := r.client.RPush(ctx, lockQueueKey, lockToken).Err()
+		err := r.client.RPush(ctx, lockQueueKey, "lockToken").Err()
 		logger.Printf("redis lock %s released", key)
 		lockReleased = true
-		cancel() // cancel the context to stop the goroutine
+		cancel() // Cancel the context to stop the goroutine
 		if err != nil {
 			return fmt.Errorf("failed to release lock for key %s: %w", key, err)
 		}
@@ -171,12 +208,13 @@ func (r *RedisExternalCache) InitLock(ctx context.Context, key string) error {
 	}
 
 	if exists == 0 {
-		// Initialize the lock queue if it doesn't exist.
+		logger.Printf("initialize lock queue for key %s", key)
 		err := r.client.RPush(ctx, lockQueueKey, lockToken).Err()
 		if err != nil {
 			return fmt.Errorf("failed to initialize lock queue for key %s: %w", key, err)
 		}
 	} else {
+		logger.Printf("lock queue for key %s already exists", key)
 		// Optional: Ensure the queue has the correct token.
 		tokenCount, err := r.client.LLen(ctx, lockQueueKey).Result()
 		if err != nil {
@@ -184,7 +222,7 @@ func (r *RedisExternalCache) InitLock(ctx context.Context, key string) error {
 		}
 
 		if tokenCount == 0 {
-			// Reinitialize the lock queue if it's empty.
+			logger.Printf("reinitialize lock queue for key %s as it was empty", key)
 			err := r.client.RPush(ctx, lockQueueKey, lockToken).Err()
 			if err != nil {
 				return fmt.Errorf("failed to reinitialize lock queue for key %s: %w", key, err)

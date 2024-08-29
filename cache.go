@@ -1,6 +1,7 @@
 package cachecalc
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -63,10 +64,6 @@ type CachedCalculations struct {
 	cancel        context.CancelFunc
 	sync.Mutex
 	sync.WaitGroup
-}
-
-func getKeyLock(key string) string {
-	return key + ".lock"
 }
 
 var logger *log.Logger
@@ -203,10 +200,11 @@ func (cc *CachedCalculations) obtainValue(ctx context.Context, r *request) (err 
 	}
 	// entry is locked here
 	if cc.externalCache == nil {
-		return cc.calculateValue(ctx, r, entry, true) // unlocks entry
+		_, err = cc.calculateValue(ctx, r, entry, true) // unlocks entry
 	} else {
-		return cc.obtainExternal(ctx, entry, r)
+		err = cc.obtainExternal(ctx, entry, r) // unlocks entry
 	}
+	return
 }
 
 func (cc *CachedCalculations) valueReady(ctx context.Context, entry *CacheEntry, r *request) (result bool, err error) {
@@ -268,33 +266,34 @@ func (cc *CachedCalculations) pushValue(entry *CacheEntry, r *request, startExpi
 	if err != nil {
 		r.ready <- err
 		logger.Printf("thread %v, pushing error %s = %v to ready channel", thread, r.key, err)
-	} else {
-		// store value to the destination variable
-		err := deserialize(entry.Value, r.dest)
-		v := reflect.ValueOf(r.dest).Elem()
-		logger.Printf("thread %v, pushing value %v of %s : %v to ready channel", thread, getEntryValue(entry, r), r.key, v)
-		r.ready <- err
-		if startExpiration && r.ExpireEntry != nil {
-			// run goroutine to expire entry
-			var wg sync.WaitGroup
-			wg.Add(1)
-			go func() {
-				logger.Printf("thread %v, listening expiration channel for entry %s\n", thread, r.key)
-				// wait for expiration signal or context done
-				wg.Done()
-				select {
-				case <-r.ExpireEntry:
-					logger.Printf("thread %v, expiration signal received: entry %s is being removed\n", thread, r.key)
-					cc.removeEntry(entry.ctx, r.key, true)
-					logger.Printf("thread %v, broadcast the `removing of entry %s completed` signal back to the client", thread, r.key)
-					close(r.ExpireEntry)
-				case <-ctx.Done():
-					logger.Printf("thread %v, entry %s context done\n", thread, r.key)
-				}
-			}()
-			wg.Wait() // give time for goroutine to start
-		}
+		return
 	}
+	// store value to the destination variable
+	err = deserialize(entry.Value, r.dest)
+	v := reflect.ValueOf(r.dest).Elem()
+	logger.Printf("thread %v, pushing value %v of %s : %v to ready channel", thread, getEntryValue(entry, r), r.key, v)
+	r.ready <- err
+	if !startExpiration || r.ExpireEntry == nil {
+		return
+	}
+	// run goroutine to expire entry
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		logger.Printf("thread %v, listening expiration channel for entry %s\n", thread, r.key)
+		// wait for expiration signal or context done
+		wg.Done()
+		select {
+		case <-r.ExpireEntry:
+			logger.Printf("thread %v, expiration signal received: entry %s is being removed\n", thread, r.key)
+			cc.removeEntry(entry.ctx, r.key, true)
+			logger.Printf("thread %v, broadcast the `removing of entry %s completed` signal back to the client", thread, r.key)
+			close(r.ExpireEntry)
+		case <-ctx.Done():
+			logger.Printf("thread %v, entry %s context done\n", thread, r.key)
+		}
+	}()
+	wg.Wait() // give time for goroutine to start
 }
 
 func (cc *CachedCalculations) removeEntry(ctx context.Context, key any, removeExternal bool) {
@@ -329,7 +328,7 @@ func getThread(ctx context.Context) any {
 }
 
 // calculateValue expects entry to be locked with .Lock and will unlock it before exit
-func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, entry *CacheEntry, unlockEntry bool) (err error) {
+func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, entry *CacheEntry, unlockEntry bool) (valueUpdated bool, err error) {
 	if unlockEntry {
 		defer entry.Unlock() // entry locked before calculateValue
 	}
@@ -344,14 +343,14 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 		logger.Printf("thread %v,entry %s checking refresh %v", thread, r.key, entry.Refresh.Sub(time.Now()))
 		if entry.Refresh.After(time.Now()) {
 			err = entry.Err
-			return err
+			return
 		}
 		reason = "entry refresh"
 		logger.Printf("thread %v,entry %s will be refreshed", thread, r.key)
 	}
 	if entry.ctx.Err() != nil {
 		err = entry.ctx.Err()
-		return err
+		return
 	}
 	// will be calculating/refreshing value
 	entry.wait = make(chan struct{}) // mark that calculation is being performed for this entry
@@ -387,7 +386,9 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	logger.Printf("thread %v,waiting to lock entry %s for updating && broadcasting value is ready\n", thread, r.key)
 	entry.Lock() // lock entry before updating
 	if err == nil {
+		oldValue := entry.Value
 		entry.Value, err = serialize(v)
+		valueUpdated = !bytes.Equal(oldValue, entry.Value)
 	}
 	entry.Err = err
 	entry.CalcDuration = calcDuration

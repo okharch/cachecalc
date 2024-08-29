@@ -14,10 +14,9 @@ type ExternalCache interface {
 	// Should return nil if successful.
 	Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
 
-	// InitLock initializes the lock for the key, need to reset lock so it becomes available
-	InitLock(ctx context.Context, key string) error
-
 	// GetLock attempts to acquire a distributed lock using the provided ExternalCache.
+	// should return a function that releases the lock and an error if the lock could not be acquired.
+	// if no error but release function is nil, the lock is not acquired, probably because it is already locked.
 	GetLock(ctx context.Context, key string) (releaseLock func() error, err error)
 
 	// Get gets the value of key.
@@ -33,4 +32,8 @@ type ExternalCache interface {
 
 	// ExpireEntries returns a channel of keys that have been deleted.
 	ExpireEntries(ctx context.Context) chan string
+
+	// RefreshEntry is a channel which will be used to refresh the entry
+	// subscriber provides the key and the channel will return the fresh value
+	RefreshEntry(ctx context.Context, key string) chan []byte
 }

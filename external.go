@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+func getKeyLock(key string) string {
+	return key + ".lock"
+}
+
 // external cache minimum delay, it can be aligned during execution
 var ecMinDelay = time.Millisecond * 100
 
@@ -14,24 +18,10 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, entry *CacheEn
 	key := fmt.Sprint(r.key)
 	lockKey := getKeyLock(key)
 	thread := getThread(ctx)
-	externalLock := false
-	unlockEntry := true // entry is locked here
 	//entry.wait = make(chan struct{}) // make all other threads wait
 	defer func() {
-		//close(entry.wait) // release other threads
-		//entry.wait = nil
-		// release external lock on exit if it was obtained
-		if externalLock {
-			logger.Printf("thread %v: remove external lock %s", thread, lockKey)
-			// with fresh context as we might be exiting with expired context
-			if err = cc.externalCache.Del(context.TODO(), lockKey); err != nil { // remove lock before leaving obtainExternal()
-				logger.Printf("thread %v, failed to remove lock %s: %s", thread, lockKey, err)
-			} else {
-				logger.Printf("thread %v, external lock %s removed", thread, lockKey)
-			}
-		}
-		if entry != nil && unlockEntry {
-			logger.Printf("thread %v: unlock entry %s, broadcast value", thread, key)
+		if entry != nil {
+			logger.Printf("thread %v: unlock entry %s, broadcast value: %v", thread, key, getEntryValue(entry, r))
 			entry.Unlock()
 		}
 	}()
@@ -59,32 +49,33 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, entry *CacheEn
 	if err != nil {
 		return fmt.Errorf("thread %v: %s failed to obtain entrySerialized from external cache: %w", thread, key, err)
 	}
+	var valueUpdated bool
 	if externalExists {
-		logger.Printf("thread %v:%s external value exists", thread, key)
 		err = deserializeEntry(entrySerialized, entry)
+		logger.Printf("thread %v:%s external value exists: %v", thread, key, getEntryValue(entry, r))
 		if err != nil {
 			return fmt.Errorf("thread %v: %s failed to obtain entrySerialized from external cache: %w", thread, key, err)
 		}
 		if entry.Err != nil {
 			return entry.Err
 		}
-		logger.Printf("thread %v: broadcast %s external value", thread, key)
-		unlockEntry = false // entry will be unlocked by calculateValue
-		err = cc.calculateValue(ctx, r, entry, true)
+		valueUpdated, err = cc.calculateValue(ctx, r, entry, false)
+		logger.Printf("thread %v: broadcast %s external value:%v", thread, key, getEntryValue(entry, r))
 	} else {
 		logger.Printf("thread %v:%s external value does not exist", thread, key)
-		unlockEntry = false // entry will be unlocked by calculateValue
-		err = cc.calculateValue(ctx, r, entry, false)
-		defer entry.Unlock()
+		_, err = cc.calculateValue(ctx, r, entry, false)
+		valueUpdated = true
+	}
+	if err != nil {
+		return err
+	}
+	if valueUpdated {
 		se, err := serializeEntry(entry)
 		if err == nil {
 			err = cc.externalCache.Set(ctx, key, se, ttl)
 		}
-		if err != nil {
-			return err
-		}
+		logger.Printf("thread %v:%s SET external cache to %v, expires in %dms", thread, r.key, getEntryValue(entry, r), ttl.Milliseconds())
 	}
-	logger.Printf("thread %v:%s SET external cache to %v, expires in %dms", thread, r.key, getEntryValue(entry, r), ttl.Milliseconds())
 	err = entry.Err
 	return err
 }

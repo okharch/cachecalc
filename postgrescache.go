@@ -132,8 +132,6 @@ func (p *PostgresCache) Get(ctx context.Context, key string) (value []byte, exis
 	if err != nil {
 		return nil, false, err
 	}
-	thread := getThread(ctx)
-	logger.Printf("thread %v: obtained value", thread)
 
 	return value, true, nil
 }
@@ -194,6 +192,7 @@ func (p *PostgresCache) ExpireEntries(ctx context.Context) chan string {
 
 // GetLock attempts to acquire a distributed lock using pg_advisory_lock.
 func (p *PostgresCache) GetLock(ctx context.Context, key string) (releaseLock func() error, err error) {
+	thread := getThread(ctx)
 	p.Lock()
 	keyLock, exists := p.locks[key]
 	if !exists {
@@ -212,6 +211,7 @@ func (p *PostgresCache) GetLock(ctx context.Context, key string) (releaseLock fu
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire lock for key %s: %w", key, err)
 	}
+	logger.Printf("thread: %v:postgres: Acquired lock for key %s", thread, key)
 
 	ctxUnlock, cancel := context.WithCancel(ctx)
 
@@ -230,6 +230,7 @@ func (p *PostgresCache) GetLock(ctx context.Context, key string) (releaseLock fu
 		if err != nil {
 			return fmt.Errorf("failed to release lock for key %s: %w", key, err)
 		}
+		logger.Printf("thread: %v:postgres: Released lock for key %s", thread, key)
 		return nil
 	}
 
