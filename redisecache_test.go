@@ -2,243 +2,46 @@ package cachecalc
 
 import (
 	"context"
-	"crypto/rand"
-	"github.com/go-redis/redis/v8"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"log"
-	"sync"
 	"testing"
-	"time"
 )
 
-func TestRedisExtCache(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.TODO())
-	defer cancel()
-	logger.Println("TestRedisExtCache...")
-	ecache, err := NewRedisCache(ctx)
-	if err != nil {
-		t.Skipf("Redis not available: %s", err)
-	}
-	require.NotNil(t, ecache)
-	var wg sync.WaitGroup
-	//var mu sync.Mutex
-	test := func() {
-		defer wg.Done()
-		// try to get some random key with the same value
-		keyb := make([]byte, 8)
-		_, err := rand.Read(keyb)
-		require.NoError(t, err)
-		val := make([]byte, 128)
-		_, err = rand.Read(val)
-		require.NoError(t, err)
-		key := string(keyb)
-		err = ecache.Set(ctx, key, val, time.Minute)
-		require.NoError(t, err)
-		// check if it has written the key: exists and value is the same
-		valGot, exists, err := ecache.Get(ctx, key)
-		require.NoError(t, err)
-		require.True(t, exists)
-		require.Equal(t, val, valGot)
-		// remove key
-		err = ecache.Del(ctx, key)
-		require.NoError(t, err)
-		// make sure it does not exist
-		val, exists, err = ecache.Get(ctx, key)
-		require.NoError(t, err)
-		require.False(t, exists)
-		// make expiration test
-		err = ecache.Set(ctx, key, val, time.Millisecond*200)
-		require.NoError(t, err)
-		time.Sleep(time.Millisecond * 500)
-		_, exists, err = ecache.Get(ctx, key)
-		require.NoError(t, err)
-		require.False(t, exists)
-	}
-	// ordinary test
-	wg.Add(101)
-	test()
-	// put some concurrency
-	for i := 0; i < 100; i++ {
-		go test()
-	}
-	wg.Wait()
-	// cancel context and check whether it returns error
-	cancel()
-	err = ecache.Set(ctx, "test", []byte("test"), time.Minute)
-	require.Error(t, err)
-}
-
+// type initCacheFunc func(*testing.T) func(context.Context) ExternalCache
 func initRedisCache(t *testing.T) func(context.Context) ExternalCache {
 	return func(ctx context.Context) ExternalCache {
 		externalCache, err := NewRedisCache(ctx)
 		if err != nil {
-			t.Skipf("skip test due external cache not available: %s", err)
+			t.Skipf("skip test due to external cache not being available: %s", err)
 		}
 		return externalCache
 	}
 }
 
-func TestExternalCacheRedis(t *testing.T) {
-	log.Println("TestExternalCacheRedis...")
-	ctx := context.TODO()
-	testExternalCache(t, ctx, initRedisCache(t))
+// TestSet tests the Set method of the ExternalCache interface.
+func TestSet(t *testing.T) {
+	testSet(t, initRedisCache)
 }
 
-func TestRemoteRedis(t *testing.T) {
-	log.Println("TestRemoteRedis...")
-	ctx := context.TODO()
-	testRemote(t, ctx, initRedisCache(t))
+// TestGet tests the Get method of the ExternalCache interface.
+func TestGet(t *testing.T) {
+	testGet(t, initRedisCache)
 }
 
-func TestRemoteConcurrentRedis(t *testing.T) {
-	log.Println("TestRemoteConcurrentRedis...")
-	ctx := context.TODO()
-	testRemoteConcurrent(t, ctx, initRedisCache(t))
+// TestDel tests the Del method of the ExternalCache interface.
+func TestDel(t *testing.T) {
+	testDel(t, initRedisCache)
 }
 
-func TestExpirationRedis(t *testing.T) {
-	logger.Println("TestExpirationRedis...")
-	// init redis external cache
-	testKeyExpiration(t, initRedisCache(t))
+// TestGetLock tests the GetLock method of the ExternalCache interface.
+func TestGetLock(t *testing.T) {
+	testGetLock(t, initRedisCache)
 }
 
-func TestGetExternalLockRedis(t *testing.T) {
-	logger.Println("TestGetExternalLockRedis...")
-	testGetExternalLock(t, initRedisCache)
+// TestEntryUpdates tests the EntryUpdates method of the ExternalCache interface.
+func TestEntryUpdates(t *testing.T) {
+	testEntryUpdates(t, initRedisCache)
 }
 
-func TestGetExternalLockExpiration(t *testing.T) {
-	testGetExternalLockExpiration(t, initRedisCache)
-}
-
-func TestRedisLPop(t *testing.T) {
-	ctx := context.Background()
-
-	// Initialize Redis client
-	client, err := GetRedis(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
-
-	// Define the key to use for testing
-	lockQueueKey := "lock_queue:test-lock"
-
-	// Ensure the key is clean before starting the test
-	client.Del(ctx, lockQueueKey)
-
-	// Check if the list exists or has elements before attempting to BLPop
-	listExists, err := client.Exists(ctx, lockQueueKey).Result()
-	require.NoError(t, err)
-	require.Equal(t, int64(0), listExists)
-
-	logger.Printf("lock queue for key %s exists: %v", lockQueueKey, listExists)
-
-	// Step 1: Verify the list is empty (start from here)
-	values, err := client.LRange(ctx, lockQueueKey, 0, -1).Result()
-	assert.NoError(t, err)
-	assert.Empty(t, values)
-
-	// Case 1: Queue is already empty
-	// Step 2: Attempt to pop from the empty list
-	result, err := client.LPop(ctx, lockQueueKey).Result()
-	assert.Equal(t, redis.Nil, err)
-	assert.Equal(t, "", result)
-
-	// Case 2: Push a token to the list and pop it
-	// Step 3: Push a token to the list
-	err = client.RPush(ctx, lockQueueKey, "token").Err()
-	assert.NoError(t, err)
-
-	listExists, err = client.Exists(ctx, lockQueueKey).Result()
-	require.NoError(t, err)
-	logger.Printf("lock queue for key %s exists: %v", lockQueueKey, listExists)
-	require.Equal(t, int64(1), listExists)
-
-	// Step 4: Verify the list content
-	length, err := client.LLen(ctx, lockQueueKey).Result()
-	assert.NoError(t, err)
-	assert.Equal(t, int64(1), length)
-
-	values, err = client.LRange(ctx, lockQueueKey, 0, -1).Result()
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"token"}, values)
-
-	// Step 5: Pop the token from the list
-	result, err = client.LPop(ctx, lockQueueKey).Result()
-	assert.NoError(t, err)
-	assert.Equal(t, "token", result)
-
-	listExists, err = client.Exists(ctx, lockQueueKey).Result()
-	require.NoError(t, err)
-	logger.Printf("lock queue for key %s exists: %v", lockQueueKey, listExists)
-	require.Equal(t, int64(1), listExists)
-
-	// Step 6: Verify the list is empty after popping
-	length, err = client.LLen(ctx, lockQueueKey).Result()
-	assert.NoError(t, err)
-	assert.Equal(t, int64(0), length)
-
-	values, err = client.LRange(ctx, lockQueueKey, 0, -1).Result()
-	assert.NoError(t, err)
-	assert.Empty(t, values)
-
-	// Clean up the key
-	client.Del(ctx, lockQueueKey)
-}
-
-func TestRedisBLPop(t *testing.T) {
-	ctx := context.Background()
-
-	// Initialize Redis client
-	client, err := GetRedis(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
-
-	// Define the key to use for testing
-	lockQueueKey := "lock_queue:test-lock"
-
-	// Ensure the key is clean before starting the test
-	client.Del(ctx, lockQueueKey)
-
-	// Step 1: Verify the list is empty (start from here)
-	values, err := client.LRange(ctx, lockQueueKey, 0, -1).Result()
-	assert.NoError(t, err)
-	assert.Empty(t, values)
-
-	// Case 1: Queue is already empty
-	logger.Println("Attempt to block pop from the empty list. Will wait for 1s timeout")
-	result, err := client.BLPop(ctx, time.Second, lockQueueKey).Result()
-	assert.Equal(t, redis.Nil, err)
-	assert.Empty(t, result)
-
-	// Case 2: Push a token to the list and block pop it
-	// Step 3: Push a token to the list
-	err = client.RPush(ctx, lockQueueKey, "token").Err()
-	assert.NoError(t, err)
-
-	// Step 4: Verify the list content
-	length, err := client.LLen(ctx, lockQueueKey).Result()
-	assert.NoError(t, err)
-	assert.Equal(t, int64(1), length)
-
-	values, err = client.LRange(ctx, lockQueueKey, 0, -1).Result()
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"token"}, values)
-
-	// Step 5: Block pop the token from the list with a 1-second timeout
-	result, err = client.BLPop(ctx, 1*time.Second, lockQueueKey).Result()
-	assert.NoError(t, err)
-	assert.Equal(t, []string{lockQueueKey, "token"}, result)
-
-	// Step 6: Verify the list is empty after popping
-	length, err = client.LLen(ctx, lockQueueKey).Result()
-	assert.NoError(t, err)
-	assert.Equal(t, int64(0), length)
-
-	values, err = client.LRange(ctx, lockQueueKey, 0, -1).Result()
-	assert.NoError(t, err)
-	assert.Empty(t, values)
-
-	// Clean up the key
-	client.Del(ctx, lockQueueKey)
+// TestClose tests the Close method of the ExternalCache interface.
+func TestClose(t *testing.T) {
+	testClose(t, initRedisCache)
 }

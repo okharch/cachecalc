@@ -53,7 +53,7 @@ func testGetLock(t *testing.T, initCache initCacheFunc) {
 	_, err = cache.GetLock(ctx, key)
 	require.Error(t, err, "GetLock should return an error on context cancellation")
 
-	// Verify that the lock is still held
+	// Verify that the lock is no more held
 	release2, err := cache.GetLock(context.Background(), key)
 	require.NoError(t, err, "GetLock should not return an error")
 	require.Nil(t, release2, "Release function should be nil as the lock is still held")
@@ -66,6 +66,17 @@ func testGetLock(t *testing.T, initCache initCacheFunc) {
 	release3, err := cache.GetLock(context.Background(), key)
 	require.NoError(t, err, "GetLock should not return an error")
 	require.NotNil(t, release3, "Release function should not be nil after releasing the lock")
+	// release the lock
+	err = release3()
+	require.NoError(t, err, "Release should not return an error")
+	// check if the lock is no more held
+	release4, err := cache.GetLock(context.Background(), key)
+	require.NoError(t, err, "GetLock should not return an error")
+	require.NotNil(t, release4, "Release function should not be nil after releasing the lock")
+	// now try to get another lock and make sure it is not acquired
+	release5, err := cache.GetLock(context.Background(), key)
+	require.NoError(t, err, "GetLock should not return an error")
+	require.Nil(t, release5, "Release function should be nil as the lock is still held")
 }
 
 // testGet tests the Get method of the ExternalCache interface, including TTL expiration and context cancellation.
@@ -112,13 +123,6 @@ func testDel(t *testing.T, initCache initCacheFunc) {
 	err := cache.Set(context.Background(), key, value, ttl)
 	require.NoError(t, err, "Set should not return an error")
 
-	// Test context cancellation during delete
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err = cache.Del(ctx, key)
-	require.Error(t, err, "Del should return an error on context cancellation")
-
 	// Delete the key without context cancellation and check that it no longer exists
 	err = cache.Del(context.Background(), key)
 	require.NoError(t, err, "Del should not return an error")
@@ -130,60 +134,65 @@ func testDel(t *testing.T, initCache initCacheFunc) {
 	require.Nil(t, retrievedValue, "Retrieved value should be nil after deletion")
 }
 
-// testExpireEntries tests the ExpireEntries method of the ExternalCache interface, including TTL expiration.
-func testExpireEntries(t *testing.T, initCache initCacheFunc) {
+// testEntryUpdates tests the EntryUpdates method of the ExternalCache interface, including context cancellation.
+func testEntryUpdates(t *testing.T, initCache initCacheFunc) {
 	cache := initCache(t)(context.Background())
 
 	key := "test-key"
 	value := []byte("test-value")
 
-	err := cache.Set(context.Background(), key, value, ttl)
+	// create channel first, so it will be ready to receive the updated value
+	ctx, cancel := context.WithCancel(context.Background())
+	updatesCh, err := cache.EntryUpdates(ctx, key)
+	require.NoError(t, err, "EntryUpdates should not return an error")
+
+	err = cache.Set(context.Background(), key, value, ttl)
 	require.NoError(t, err, "Set should not return an error")
 
-	expireCh := cache.ExpireEntries(context.Background())
-
-	// Ensure key expiration after TTL
+	// make sure we receive the value
 	select {
-	case expiredKey := <-expireCh:
-		require.Equal(t, key, expiredKey, "Expired key should match set key")
+	case updatedValue := <-updatesCh:
+		require.Equal(t, value, updatedValue, "updated value should match set value")
 	case <-time.After(ttl * 33 / 32):
-		t.Error("Expected key to expire, but it did not")
+		t.Error("Expected entry to be refreshed, but it was not")
 	}
-}
-
-// testRefreshEntry tests the RefreshEntry method of the ExternalCache interface, including context cancellation.
-func testRefreshEntry(t *testing.T, initCache initCacheFunc) {
-	cache := initCache(t)(context.Background())
-
-	key := "test-key"
-	value := []byte("test-value")
-
-	err := cache.Set(context.Background(), key, value, ttl)
-	require.NoError(t, err, "Set should not return an error")
-
-	refreshCh := cache.RefreshEntry(context.Background(), key)
 
 	// Simulate a refresh by setting a new value
 	newValue := []byte("new-value")
-	go func() {
-		time.Sleep(ttl * 33 / 32)
-		cache.Set(context.Background(), key, newValue, ttl)
-	}()
+	cache.Set(context.Background(), key, newValue, ttl)
 
 	select {
-	case refreshedValue := <-refreshCh:
-		require.Equal(t, newValue, refreshedValue, "Refreshed value should match new set value")
+	case updatedValue := <-updatesCh:
+		require.Equal(t, newValue, updatedValue, "updated value should match new set value")
+	case <-time.After(ttl * 33 / 32):
+		t.Error("Expected entry to be refreshed, but it was not")
+	}
+
+	// now test that when we delete the key, the channel will send the nil as a value
+	err = cache.Del(context.Background(), key)
+	require.NoError(t, err, "Del should not return an error")
+	select {
+	case updatedValue := <-updatesCh:
+		require.Equal(t, nil, updatedValue, "updated value should be nil after deletion")
+	case <-time.After(ttl * 33 / 32):
+		t.Error("Expected to receive nil value, but it was not")
+	}
+
+	// now check that subscriptions still work after deletion
+	newValue = []byte("new-value")
+	cache.Set(context.Background(), key, newValue, ttl)
+	select {
+	case updatedValue := <-updatesCh:
+		require.Equal(t, newValue, updatedValue, "updated value should match new set value")
 	case <-time.After(ttl * 33 / 32):
 		t.Error("Expected entry to be refreshed, but it was not")
 	}
 
 	// Test context cancellation
-	ctx, cancel := context.WithCancel(context.Background())
-	ch, err := cache.RefreshEntry(ctx, key)
 	cancel()
 	// Ensure the channel is closed on context cancellation
 	select {
-	case _, ok := <-ch:
+	case _, ok := <-updatesCh:
 		require.False(t, ok, "Expected channel to be closed on context cancellation")
 	case <-time.After(time.Second):
 		t.Error("Expected channel to be closed on context cancellation")

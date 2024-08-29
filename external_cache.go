@@ -30,10 +30,7 @@ type ExternalCache interface {
 	// Close closes the connection to the external cache.
 	Close() error
 
-	// ExpireEntries returns a channel of keys that have been deleted.
-	ExpireEntries(ctx context.Context) chan string
-
-	// RefreshEntry is a channel which will be used to refresh the entry
+	// EntryUpdates is a channel which will be used to refresh the entry
 	// subscriber provides the key and the channel will return the fresh value
-	RefreshEntry(ctx context.Context, key string) chan []byte
+	EntryUpdates(ctx context.Context, key string) (chan []byte, error)
 }
