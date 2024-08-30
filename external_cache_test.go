@@ -51,7 +51,7 @@ func testGetLock(t *testing.T, initCache initCacheFunc, minTTL time.Duration) {
 	// Cancel the context and ensure it affects the operation
 	cancel()
 	// give some time for the release function to be called
-	time.Sleep(time.Millisecond * 100)
+	time.Sleep(time.Millisecond * 20)
 	_, err = cache.GetLock(ctx, key, minTTL)
 	require.Error(t, err, "GetLock should return an error on context cancellation")
 
@@ -72,6 +72,15 @@ func testGetLock(t *testing.T, initCache initCacheFunc, minTTL time.Duration) {
 	release5, err := cache.GetLock(context.Background(), key, minTTL)
 	require.NoError(t, err, "GetLock should not return an error")
 	require.Nil(t, release5, "Release function should be nil as the lock is still held")
+	// now wait for the lock to expire
+	time.Sleep(minTTL * 33 / 32)
+	// now try to get another lock and make sure it is acquired
+	release4, err := cache.GetLock(context.Background(), key, minTTL)
+	require.NoError(t, err, "GetLock should not return an error")
+	require.NotNil(t, release4, "Release function should not be nil as the lock is not held")
+	// now release the lock
+	err = release4()
+	require.NoError(t, err, "Release should not return an error")
 }
 
 // testGet tests the Get method of the ExternalCache interface, including TTL expiration and context cancellation.

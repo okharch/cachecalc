@@ -39,7 +39,7 @@ func TestClose(t *testing.T) {
 
 // TestGetLock tests the GetLock method of the ExternalCache interface.
 func TestGetLock(t *testing.T) {
-	testGetLock(t, initRedisCache, time.Second)
+	testGetLock(t, initRedisCache, time.Millisecond*200)
 }
 
 // TestEntryUpdates tests the EntryUpdates method of the ExternalCache interface.
