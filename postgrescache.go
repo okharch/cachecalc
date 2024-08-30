@@ -35,6 +35,30 @@ const (
 	dropTriggerQuery  = `DROP TRIGGER IF EXISTS cache_entry_deleted_trigger ON postgres_cache_key_value_expired_v_1_4`
 	dropFunctionQuery = `DROP FUNCTION IF EXISTS notify_cache_entry_deleted`
 
+	createAquireLockFunctionQuery = `CREATE OR REPLACE FUNCTION acquire_lock(key text, lock_value bytea, lock_ttl interval)
+RETURNS boolean AS $$
+DECLARE
+    lock_key text := 'lock-key-' || key;
+BEGIN
+    -- Delete the lock if it has expired
+    DELETE FROM postgres_cache_key_value_expired_v_1_4
+    WHERE key = lock_key AND expires_at <= NOW();
+
+    -- Try to insert the new lock
+    INSERT INTO postgres_cache_key_value_expired_v_1_4 (key, value, expires_at)
+    VALUES (lock_key, lock_value, NOW() + lock_ttl)
+    ON CONFLICT DO NOTHING;
+
+    -- Check if the lock was successfully acquired
+    IF FOUND THEN
+        RETURN TRUE;
+    ELSE
+        RETURN FALSE;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+`
+
 	createTriggerFunctionQuery = `
 	CREATE OR REPLACE FUNCTION notify_cache_entry_deleted() RETURNS trigger AS $$
 	BEGIN
@@ -102,6 +126,46 @@ func NewPostgresCache(ctx context.Context, dbUrl string) (ExternalCache, error) 
 	return p, nil
 }
 
+func (p *PostgresCache) EntryUpdates(ctx context.Context, key string) (chan []byte, error) {
+	// Create a channel to receive updates
+	ch := make(chan []byte)
+
+	// Create a goroutine to listen for notifications
+	go func() {
+		// Listen for notifications
+		listener := pq.NewListener(p.dsn, 10*time.Second, time.Minute, nil)
+		logger.Printf("Listening for notifications on %s", p.dsn)
+		err := listener.Listen("cache_entry_deleted")
+		if err != nil {
+			logger.Printf("Error setting up listener: %v", err)
+			return
+		}
+		defer func() {
+			// ignore error on close
+			_ = listener.Close()
+		}()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case notification := <-listener.Notify:
+				if notification != nil && notification.Extra == key {
+					// Send the notification to the channel
+					ch <- []byte(notification.Extra)
+				}
+			case <-time.After(90 * time.Second):
+				go func() {
+					// ignore error
+					_ = listener.Ping()
+				}()
+			}
+		}
+	}()
+
+	return ch, nil
+}
+
 func (p *PostgresCache) purgeExpired(ctx context.Context) error {
 	thread := getThread(ctx)
 	r, err := p.db.ExecContext(ctx, deleteExpiredQuery)
@@ -150,107 +214,77 @@ func (p *PostgresCache) Close() error {
 	return p.db.Close()
 }
 
-func (p *PostgresCache) ExpireEntries(ctx context.Context) chan string {
-	ch := make(chan string)
-
-	// Listen for notifications
-	listener := pq.NewListener(p.dsn, 10*time.Second, time.Minute, nil)
-	logger.Printf("Listening for notifications on %s", p.dsn)
-	err := listener.Listen("cache_entry_deleted")
-	if err != nil {
-		logger.Printf("Error setting up listener: %v", err)
-		return nil
-	}
-	defer func() {
-		// ignore error on close
-		_ = listener.Close()
-	}()
-
-	go func() {
-		defer close(ch)
-
-		logger.Printf("Listening for db notifications on cache_entry_deleted")
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case notification := <-listener.Notify:
-				if notification != nil {
-					ch <- notification.Extra
-				}
-			case <-time.After(90 * time.Second):
-				go func() {
-					// ignore error
-					_ = listener.Ping()
-				}()
-			}
-		}
-	}()
-
-	return ch
-}
+//func (p *PostgresCache) ExpireEntries(ctx context.Context) chan string {
+//	ch := make(chan string)
+//
+//	// Listen for notifications
+//	listener := pq.NewListener(p.dsn, 10*time.Second, time.Minute, nil)
+//	logger.Printf("Listening for notifications on %s", p.dsn)
+//	err := listener.Listen("cache_entry_deleted")
+//	if err != nil {
+//		logger.Printf("Error setting up listener: %v", err)
+//		return nil
+//	}
+//	defer func() {
+//		// ignore error on close
+//		_ = listener.Close()
+//	}()
+//
+//	go func() {
+//		defer close(ch)
+//
+//		logger.Printf("Listening for db notifications on cache_entry_deleted")
+//		for {
+//			select {
+//			case <-ctx.Done():
+//				return
+//			case notification := <-listener.Notify:
+//				if notification != nil {
+//					ch <- notification.Extra
+//				}
+//			case <-time.After(90 * time.Second):
+//				go func() {
+//					// ignore error
+//					_ = listener.Ping()
+//				}()
+//			}
+//		}
+//	}()
+//
+//	return ch
+//}
 
 // GetLock attempts to acquire a distributed lock using pg_advisory_lock.
-func (p *PostgresCache) GetLock(ctx context.Context, key string) (releaseLock func() error, err error) {
-	thread := getThread(ctx)
-	p.Lock()
-	keyLock, exists := p.locks[key]
-	if !exists {
-		keyLock = &sync.Mutex{}
-		p.locks[key] = keyLock
-	}
-	p.Unlock()
-	// acquire local lock
-	keyLock.Lock()
-	var lockReleased bool
-	// Convert the key to an int64 hash. This is necessary because pg_advisory_lock uses an int64 key.
-	lockKey := hashKey(key)
+func (p *PostgresCache) GetLock(ctx context.Context, key string, minTTL time.Duration) (releaseLock func() error, err error) {
+	// Generate a unique value for this lock attempt
+	uniqueValue := []byte("unique-lock-value")
 
-	// Attempt to acquire the advisory lock.
-	_, err = p.db.ExecContext(ctx, "SELECT pg_advisory_lock($1)", lockKey)
+	// Define the TTL for the lock
+	lockTTL := time.Minute // or any appropriate duration
+
+	// Attempt to acquire the lock by calling the stored procedure
+	var lockAcquired bool
+	err = p.db.QueryRowContext(ctx, "SELECT acquire_lock($1, $2, $3)", key, uniqueValue, lockTTL).Scan(&lockAcquired)
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire lock for key %s: %w", key, err)
 	}
-	logger.Printf("thread: %v:postgres: Acquired lock for key %s", thread, key)
 
-	ctxUnlock, cancel := context.WithCancel(ctx)
+	if !lockAcquired {
+		// Lock was not acquired, return nil for release function
+		return nil, nil
+	}
 
-	// Define the function to release the lock.
+	// Lock was successfully acquired, return the release function
 	releaseLock = func() error {
-		if lockReleased {
-			return nil
-		}
-		// use timeout context to execute the query
-		ctx, cancelUnlock := context.WithTimeout(context.TODO(), 5*time.Second)
-		defer cancelUnlock()
-		_, err := p.db.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", lockKey)
-		lockReleased = true
-		keyLock.Unlock()
-		cancel() // cancel the context to stop the goroutine
+		// Remove the key from the table to release the lock
+		lockKey := "lock-key-" + key
+		query := `DELETE FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1`
+		_, err := p.db.ExecContext(ctx, query, lockKey)
 		if err != nil {
 			return fmt.Errorf("failed to release lock for key %s: %w", key, err)
 		}
-		logger.Printf("thread: %v:postgres: Released lock for key %s", thread, key)
 		return nil
 	}
 
-	go releaseLockOnContextCancel(ctxUnlock, releaseLock)
-
 	return releaseLock, nil
-}
-
-// hashKey is a helper function to convert a string key into an int64 hash.
-func hashKey(key string) int64 {
-	var hash int64
-	for _, c := range key {
-		hash = (hash * 31) + int64(c)
-	}
-	return hash
-}
-
-// InitLock is a no-op when using pg_advisory_lock, as no initialization is required.
-func (p *PostgresCache) InitLock(ctx context.Context, key string) error {
-
-	// No initialization needed for pg_advisory_lock
-	return nil
 }

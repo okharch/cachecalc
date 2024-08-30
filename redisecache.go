@@ -149,7 +149,7 @@ func (r *RedisExternalCache) Close() error {
 	return r.client.Close()
 }
 
-func (r *RedisExternalCache) GetLock(ctx context.Context, key string) (releaseLock func() error, err error) {
+func (r *RedisExternalCache) GetLock(ctx context.Context, key string, ttl time.Duration) (releaseLock func() error, err error) {
 	// Attempt to obtain the lock immediately, non-blocking
 	lock, err := r.locker.Obtain(ctx, key, 0, nil) // Set duration to 0 for immediate failure if lock is held
 	if errors.Is(err, redislock.ErrNotObtained) {

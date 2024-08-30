@@ -82,19 +82,6 @@ func NewCachedCalculations(ctx context.Context, externalCache ExternalCache, max
 	cc.limitWorkers = make(chan struct{}, maxWorkers+1)
 	cc.ctx, cc.cancel = context.WithCancel(ctx)
 	cc.externalCache = externalCache
-	if externalCache != nil {
-		// remove internal cache entries which expired externally
-		cc.Add(1)
-		go func() {
-			thread := getThread(cc.ctx)
-			ch := externalCache.EntryUpdates(cc.ctx)
-			for key := range ch {
-				logger.Printf("thread %v: external cache expired key %s", thread, key)
-				cc.removeEntry(ctx, key, false)
-			}
-			cc.Done()
-		}()
-	}
 	return &cc
 }
 

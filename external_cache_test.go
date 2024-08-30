@@ -37,24 +37,24 @@ func testSet(t *testing.T, initCache initCacheFunc) {
 }
 
 // testGetLock tests the GetLock method of the ExternalCache interface, including context cancellation.
-func testGetLock(t *testing.T, initCache initCacheFunc) {
+func testGetLock(t *testing.T, initCache initCacheFunc, minTTL time.Duration) {
 	cache := initCache(t)(context.Background())
 
 	key := "test-lock"
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Attempt to acquire the lock
-	release, err := cache.GetLock(ctx, key)
+	release, err := cache.GetLock(ctx, key, minTTL)
 	require.NoError(t, err, "GetLock should not return an error")
 	require.NotNil(t, release, "Release function should not be nil")
 
 	// Cancel the context and ensure it affects the operation
 	cancel()
-	_, err = cache.GetLock(ctx, key)
+	_, err = cache.GetLock(ctx, key, minTTL)
 	require.Error(t, err, "GetLock should return an error on context cancellation")
 
 	// Verify that the lock is no more held
-	release2, err := cache.GetLock(context.Background(), key)
+	release2, err := cache.GetLock(context.Background(), key, minTTL)
 	require.NoError(t, err, "GetLock should not return an error")
 	require.Nil(t, release2, "Release function should be nil as the lock is still held")
 
@@ -63,18 +63,18 @@ func testGetLock(t *testing.T, initCache initCacheFunc) {
 	require.NoError(t, err, "Release should not return an error")
 
 	// Re-acquire the lock after releasing
-	release3, err := cache.GetLock(context.Background(), key)
+	release3, err := cache.GetLock(context.Background(), key, minTTL)
 	require.NoError(t, err, "GetLock should not return an error")
 	require.NotNil(t, release3, "Release function should not be nil after releasing the lock")
 	// release the lock
 	err = release3()
 	require.NoError(t, err, "Release should not return an error")
 	// check if the lock is no more held
-	release4, err := cache.GetLock(context.Background(), key)
+	release4, err := cache.GetLock(context.Background(), key, minTTL)
 	require.NoError(t, err, "GetLock should not return an error")
 	require.NotNil(t, release4, "Release function should not be nil after releasing the lock")
 	// now try to get another lock and make sure it is not acquired
-	release5, err := cache.GetLock(context.Background(), key)
+	release5, err := cache.GetLock(context.Background(), key, minTTL)
 	require.NoError(t, err, "GetLock should not return an error")
 	require.Nil(t, release5, "Release function should be nil as the lock is still held")
 }

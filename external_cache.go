@@ -17,7 +17,7 @@ type ExternalCache interface {
 	// GetLock attempts to acquire a distributed lock using the provided ExternalCache.
 	// should return a function that releases the lock and an error if the lock could not be acquired.
 	// if no error but release function is nil, the lock is not acquired, probably because it is already locked.
-	GetLock(ctx context.Context, key string) (releaseLock func() error, err error)
+	GetLock(ctx context.Context, key string, ttl time.Duration) (releaseLock func() error, err error)
 
 	// Get gets the value of key.
 	// exists will be false if the key does not exist.

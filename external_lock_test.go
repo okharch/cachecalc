@@ -12,13 +12,13 @@ import (
 type initCacheFunc func(*testing.T) func(context.Context) ExternalCache
 
 // Helper function to test external lock with a given cache initializer
-func testGetExternalLock(t *testing.T, initCache initCacheFunc) {
+func testGetExternalLock(t *testing.T, initCache initCacheFunc, minTTL time.Duration) {
 	ctx1 := context.WithValue(context.TODO(), "thread", 1)
 	ctx2 := context.WithValue(context.TODO(), "thread", 2)
 	ecInit := initCache(t)
 	ec := ecInit(ctx1)
 	logger.Println("trying to obtain lock thread 1...")
-	releaseLock, err := ec.GetLock(ctx1, "test")
+	releaseLock, err := ec.GetLock(ctx1, "test", minTTL)
 	logger.Println("lock obtained")
 	require.NoError(t, err)
 	require.NotNil(t, releaseLock)
@@ -32,7 +32,7 @@ func testGetExternalLock(t *testing.T, initCache initCacheFunc) {
 	waitMain.Add(1)
 	go func() {
 		defer wg.Done()
-		releaseConcurrentLock, err := ec.GetLock(ctx2, "test")
+		releaseConcurrentLock, err := ec.GetLock(ctx2, "test", minTTL)
 		logger.Println("concurrent lock obtained")
 		require.NoError(t, err)
 		require.NotNil(t, releaseConcurrentLock)
@@ -57,14 +57,14 @@ func testGetExternalLock(t *testing.T, initCache initCacheFunc) {
 	logger.Println("TestGetExternalLock done")
 }
 
-func testGetExternalLockExpiration(t *testing.T, initCache initCacheFunc) {
+func testGetExternalLockExpiration(t *testing.T, initCache initCacheFunc, minTTL time.Duration) {
 	// Initialize the base context and external cache
 	ctx, cancel := context.WithCancel(context.TODO())
 	ecInit := initCache(t)
 	ec := ecInit(ctx)
 
 	// Acquire the lock initially
-	releaseLock, err := ec.GetLock(ctx, "test-expiration")
+	releaseLock, err := ec.GetLock(ctx, "test-expiration", minTTL)
 	logger.Println("Initial lock obtained")
 	require.NoError(t, err)
 	require.NotNil(t, releaseLock)
@@ -76,7 +76,7 @@ func testGetExternalLockExpiration(t *testing.T, initCache initCacheFunc) {
 
 	go func() {
 		ctxNew := context.TODO() // New context
-		releaseLockNew, err := ec.GetLock(ctxNew, "test-expiration")
+		releaseLockNew, err := ec.GetLock(ctxNew, "test-expiration", minTTL)
 		if err == nil && releaseLockNew != nil {
 			close(lockAcquiredCh) // Signal that the lock has been acquired
 			// Clean up by releasing the new lock
@@ -98,7 +98,7 @@ func testGetExternalLockExpiration(t *testing.T, initCache initCacheFunc) {
 	logger.Println("TestGetExternalLockExpiration done")
 }
 
-func testGetLock1(t *testing.T, initCache initCacheFunc) {
+func testGetLocks(t *testing.T, initCache initCacheFunc, minTTL time.Duration) {
 	ctx1 := context.WithValue(context.TODO(), "thread", 1)
 	ctx2 := context.WithValue(context.TODO(), "thread", 2)
 
@@ -109,17 +109,17 @@ func testGetLock1(t *testing.T, initCache initCacheFunc) {
 	//require.NoError(t, ec2.InitLock(ctx2, "test-lock"))
 
 	logger.Println("*** Test concurrent locks with the same cache")
-	runTestLocks(t, ec1, ec1, ctx1, ctx2) // Test with the same cache
+	runTestLocks(t, ec1, ec1, ctx1, ctx2, minTTL) // Test with the same cache
 	logger.Println("*** Test concurrent locks with different caches")
-	runTestLocks(t, ec1, ec2, ctx1, ctx2) // Test with different caches
+	runTestLocks(t, ec1, ec2, ctx1, ctx2, minTTL) // Test with different caches
 }
 
-func runTestLocks(t *testing.T, ec1, ec2 ExternalCache, ctx1, ctx2 context.Context) {
+func runTestLocks(t *testing.T, ec1, ec2 ExternalCache, ctx1, ctx2 context.Context, minTTL time.Duration) {
 	const testKey = "test-lock"
 	for _, key := range []string{testKey, fmt.Sprintf("lock_queue:%s", testKey)} {
 		require.NoError(t, ec1.Del(ctx1, key)) // forcefully remove the lock before starting
 	}
-	releaseLock := acquireLock(t, ec1, ctx1, testKey, "main thread")
+	releaseLock := acquireLock(t, ec1, ctx1, testKey, "main thread", minTTL)
 
 	testValue := 1
 	var tvLock sync.Mutex
@@ -146,7 +146,7 @@ func runTestLocks(t *testing.T, ec1, ec2 ExternalCache, ctx1, ctx2 context.Conte
 	go func() {
 		defer wg.Done()
 		waitLock.Done()
-		releaseConcurrentLock := acquireLock(t, ec2, ctx2, testKey, "concurrent thread")
+		releaseConcurrentLock := acquireLock(t, ec2, ctx2, testKey, "concurrent thread", minTTL)
 		incTestValue()
 		logger.Println("test value incremented by concurrent thread")
 		require.NoError(t, releaseConcurrentLock())
@@ -166,9 +166,9 @@ func runTestLocks(t *testing.T, ec1, ec2 ExternalCache, ctx1, ctx2 context.Conte
 	wg.Wait()
 }
 
-func acquireLock(t *testing.T, ec ExternalCache, ctx context.Context, lockName, threadName string) func() error {
+func acquireLock(t *testing.T, ec ExternalCache, ctx context.Context, lockName, threadName string, minTTL time.Duration) func() error {
 	logger.Printf("Acquiring lock: %s from %s", lockName, threadName)
-	releaseLock, err := ec.GetLock(ctx, lockName)
+	releaseLock, err := ec.GetLock(ctx, lockName, minTTL)
 	require.NoError(t, err)
 	require.NotNil(t, releaseLock)
 	logger.Printf("Lock %s acquired from %s", lockName, threadName)
@@ -176,7 +176,7 @@ func acquireLock(t *testing.T, ec ExternalCache, ctx context.Context, lockName, 
 }
 
 // Helper function to test GetLock expiration with a given cache initializer
-func testGetLockExpiration(t *testing.T, initCache initCacheFunc) {
+func testGetLockExpiration(t *testing.T, initCache initCacheFunc, minTTL time.Duration) {
 	// Initialize the base context and external cache
 	ctx, cancel := context.WithCancel(context.TODO())
 	ecInit := initCache(t)
@@ -184,7 +184,7 @@ func testGetLockExpiration(t *testing.T, initCache initCacheFunc) {
 
 	// Acquire the lock initially
 	key := "test-lock-expiration"
-	releaseLock, err := ec.GetLock(ctx, key)
+	releaseLock, err := ec.GetLock(ctx, key, minTTL)
 	require.NoError(t, err)
 	require.NotNil(t, releaseLock)
 
@@ -197,7 +197,7 @@ func testGetLockExpiration(t *testing.T, initCache initCacheFunc) {
 	// Start a goroutine that tries to acquire the lock after cancellation
 	go func() {
 		ctxNew := context.TODO() // New context
-		releaseLockNew, err := ec.GetLock(ctxNew, key)
+		releaseLockNew, err := ec.GetLock(ctxNew, key, minTTL)
 		if err == nil && releaseLockNew != nil {
 			close(lockAcquiredCh) // Signal that the lock has been acquired
 			// Clean up by releasing the new lock
@@ -217,21 +217,21 @@ func testGetLockExpiration(t *testing.T, initCache initCacheFunc) {
 // Example of how to use the tests with a PostgresCache
 func TestPostgresCache_GetLock(t *testing.T) {
 	logger.Println("TestPostgresCache_GetLock...")
-	testGetLock(t, initPgCache)
+	testGetLock(t, initPgCache, time.Millisecond*500)
 }
 
 // Example of how to use the tests with a RedisExternalCache
 func TestRedisExternalCache_GetLock(t *testing.T) {
 	logger.Println("TestRedisExternalCache_GetLock...")
-	testGetLock(t, initRedisCache)
+	testGetLock(t, initRedisCache, time.Millisecond*100)
 }
 
 func TestPostgresCache_GetLockExpiration(t *testing.T) {
 	logger.Println("TestPostgresCache_GetLockExpiration...")
-	testGetLockExpiration(t, initPgCache)
+	testGetLockExpiration(t, initPgCache, time.Millisecond*500)
 }
 
 func TestRedisExternalCache_GetLockExpiration(t *testing.T) {
 	logger.Println("TestRedisExternalCache_GetLockExpiration...")
-	testGetLockExpiration(t, initRedisCache)
+	testGetLockExpiration(t, initRedisCache, time.Millisecond*100)
 }

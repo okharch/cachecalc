@@ -125,5 +125,5 @@ func TestExpirationPostgres(t *testing.T) {
 
 func TestGetExternalLockPostgres(t *testing.T) {
 	logger.Println("TestGetExternalLockPostgres...")
-	testGetExternalLock(t, initPgCache)
+	testGetExternalLock(t, initPgCache, time.Second)
 }

@@ -3,6 +3,7 @@ package cachecalc
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // type initCacheFunc func(*testing.T) func(context.Context) ExternalCache
@@ -33,7 +34,7 @@ func TestDel(t *testing.T) {
 
 // TestGetLock tests the GetLock method of the ExternalCache interface.
 func TestGetLock(t *testing.T) {
-	testGetLock(t, initRedisCache)
+	testGetLock(t, initRedisCache, time.Second)
 }
 
 // TestEntryUpdates tests the EntryUpdates method of the ExternalCache interface.
