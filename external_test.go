@@ -90,7 +90,8 @@ func testKeyExpiration(t *testing.T, initCache func(context.Context) ExternalCac
 	key := getRandomKey(t)
 	val := []byte("test")
 	// wait for delete key message
-	exp, err := cc.EntryUpdates(ctx, key)
+	exp, chKey, err := cc.EntryUpdates(ctx, key)
+	_ = chKey
 	require.NoError(t, err)
 	// now let's set key with long expiration and try to apply Del method to check whether that channel will trigger the message
 	key = getRandomKey(t)

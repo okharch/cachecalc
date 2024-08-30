@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/lib/pq"
 	_ "github.com/lib/pq" // Import the pq driver
 	"sync"
 	"time"
@@ -126,44 +125,12 @@ func NewPostgresCache(ctx context.Context, dbUrl string) (ExternalCache, error) 
 	return p, nil
 }
 
-func (p *PostgresCache) EntryUpdates(ctx context.Context, key string) (chan []byte, error) {
-	// Create a channel to receive updates
-	ch := make(chan []byte)
+func (p *PostgresCache) EntryUpdates(ctx context.Context, key string) (chan []byte, string, error) {
+	return nil, "", nil
+}
 
-	// Create a goroutine to listen for notifications
-	go func() {
-		// Listen for notifications
-		listener := pq.NewListener(p.dsn, 10*time.Second, time.Minute, nil)
-		logger.Printf("Listening for notifications on %s", p.dsn)
-		err := listener.Listen("cache_entry_deleted")
-		if err != nil {
-			logger.Printf("Error setting up listener: %v", err)
-			return
-		}
-		defer func() {
-			// ignore error on close
-			_ = listener.Close()
-		}()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case notification := <-listener.Notify:
-				if notification != nil && notification.Extra == key {
-					// Send the notification to the channel
-					ch <- []byte(notification.Extra)
-				}
-			case <-time.After(90 * time.Second):
-				go func() {
-					// ignore error
-					_ = listener.Ping()
-				}()
-			}
-		}
-	}()
-
-	return ch, nil
+func (p *PostgresCache) UnsubscribeUpdates(key, chanKey string) error {
+	return nil
 }
 
 func (p *PostgresCache) purgeExpired(ctx context.Context) error {

@@ -30,7 +30,10 @@ type ExternalCache interface {
 	// Close closes the connection to the external cache.
 	Close() error
 
-	// EntryUpdates is a channel which will be used to refresh the entry
-	// subscriber provides the key and the channel will return the fresh value
-	EntryUpdates(ctx context.Context, key string) (chan []byte, error)
+	// EntryUpdates is a channel which will be used to inform subscriber about the changes in the value of the key.
+	// subscriber provides the key and the channel will return the fresh value or nil if the key has been deleted.
+	// it returns chanKey which one can use to unsubscribe from the updates.
+	EntryUpdates(ctx context.Context, key string) (updates chan []byte, chanKey string, err error)
+	// UnsubscribeUpdates removes the channel from the list of subscribers.
+	UnsubscribeUpdates(key, chanKey string) error
 }

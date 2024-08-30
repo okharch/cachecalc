@@ -147,7 +147,7 @@ func testEntryUpdates(t *testing.T, initCache initCacheFunc) {
 
 	// create channel first, so it will be ready to receive the updated value
 	ctx, cancel := context.WithCancel(context.Background())
-	updatesCh, err := cache.EntryUpdates(ctx, key)
+	updatesCh, chKey, err := cache.EntryUpdates(ctx, key)
 	require.NoError(t, err, "EntryUpdates should not return an error")
 
 	err = cache.Set(context.Background(), key, value, ttl)
@@ -201,6 +201,7 @@ func testEntryUpdates(t *testing.T, initCache initCacheFunc) {
 	case <-time.After(time.Second):
 		t.Error("Expected channel to be closed on context cancellation")
 	}
+	_ = chKey
 }
 
 // testClose tests the Close method of the ExternalCache interface.

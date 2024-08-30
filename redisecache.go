@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/bsm/redislock"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"os"
 	"sync"
@@ -41,7 +42,7 @@ type RedisExternalCache struct {
 
 type subscription struct {
 	pubSub    *redis.PubSub
-	channels  []chan []byte
+	channels  map[string]chan []byte // Changed to map for easier management
 	closeChan chan struct{}
 }
 
@@ -60,7 +61,7 @@ func NewRedisCache(ctx context.Context) (ExternalCache, error) {
 	}, nil
 }
 
-func (r *RedisExternalCache) EntryUpdates(ctx context.Context, key string) (chan []byte, error) {
+func (r *RedisExternalCache) EntryUpdates(ctx context.Context, key string) (updates chan []byte, chanKey string, err error) {
 	r.subscriptionsM.Lock()
 	defer r.subscriptionsM.Unlock()
 
@@ -71,7 +72,7 @@ func (r *RedisExternalCache) EntryUpdates(ctx context.Context, key string) (chan
 		pubSub := r.client.PSubscribe(ctx, fmt.Sprintf("__keyspace@0__:%s", key))
 		sub = &subscription{
 			pubSub:    pubSub,
-			channels:  []chan []byte{},
+			channels:  make(map[string]chan []byte),
 			closeChan: make(chan struct{}),
 		}
 		r.subscriptions[key] = sub
@@ -80,44 +81,61 @@ func (r *RedisExternalCache) EntryUpdates(ctx context.Context, key string) (chan
 		go r.listenForUpdates(ctx, key, sub)
 	}
 
-	// Create a new channel for this subscriber
-	ch := make(chan []byte)
-	sub.channels = append(sub.channels, ch)
+	// Generate a unique channel key for this subscriber using UUID
+	chanKey = uuid.New().String()
 
-	// Return the channel to the caller
-	return ch, nil
+	// Create a new channel for this subscriber
+	updates = make(chan []byte)
+	sub.channels[chanKey] = updates
+
+	// Return the channel and chanKey to the caller
+	return updates, chanKey, nil
+}
+
+func (r *RedisExternalCache) UnsubscribeUpdates(key, chanKey string) error {
+	r.subscriptionsM.Lock()
+	defer r.subscriptionsM.Unlock()
+
+	sub, exists := r.subscriptions[key]
+	if !exists {
+		return fmt.Errorf("no active subscription for key %s", key)
+	}
+
+	// Check if the channel exists
+	ch, exists := sub.channels[chanKey]
+	if !exists {
+		return fmt.Errorf("no subscription with chanKey %s for key %s", chanKey, key)
+	}
+
+	// Close the channel and remove it from the map
+	close(ch)
+	delete(sub.channels, chanKey)
+
+	// If no channels are left, clean up the subscription
+	if len(sub.channels) == 0 {
+		sub.pubSub.Close()
+		close(sub.closeChan)
+		delete(r.subscriptions, key)
+	}
+
+	return nil
 }
 
 func (r *RedisExternalCache) listenForUpdates(ctx context.Context, key string, sub *subscription) {
-	defer func() {
-		r.subscriptionsM.Lock()
-		defer r.subscriptionsM.Unlock()
-
-		// Clean up the subscription
-		delete(r.subscriptions, key)
-		sub.pubSub.Close()
-		for _, ch := range sub.channels {
-			close(ch)
-		}
-	}()
-
 	for {
 		select {
 		case <-sub.pubSub.Channel():
-			// On receiving a message, get the updated value and send it to all subscribers
 			value, exists, err := r.Get(ctx, key)
-			if err != nil {
-				return
-			}
-
-			// if key does not exist send nil to all subscribers
-			if !exists {
+			if err != nil || !exists {
 				value = nil
 			}
 
+			r.subscriptionsM.Lock()
 			for _, ch := range sub.channels {
 				ch <- value
 			}
+			r.subscriptionsM.Unlock()
+
 		case <-ctx.Done():
 			return
 		case <-sub.closeChan:
@@ -149,6 +167,12 @@ func (r *RedisExternalCache) Del(ctx context.Context, key string) error {
 }
 
 func (r *RedisExternalCache) Close() error {
+	// Close all subscriptions
+	r.subscriptionsM.Lock()
+	defer r.subscriptionsM.Unlock()
+	for _, sub := range r.subscriptions {
+		close(sub.closeChan)
+	}
 	return r.client.Close()
 }
 
