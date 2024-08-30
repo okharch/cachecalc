@@ -32,6 +32,11 @@ func TestDel(t *testing.T) {
 	testDel(t, initRedisCache)
 }
 
+// TestClose tests the Close method of the ExternalCache interface.
+func TestClose(t *testing.T) {
+	testClose(t, initRedisCache)
+}
+
 // TestGetLock tests the GetLock method of the ExternalCache interface.
 func TestGetLock(t *testing.T) {
 	testGetLock(t, initRedisCache, time.Second)
@@ -40,9 +45,4 @@ func TestGetLock(t *testing.T) {
 // TestEntryUpdates tests the EntryUpdates method of the ExternalCache interface.
 func TestEntryUpdates(t *testing.T) {
 	testEntryUpdates(t, initRedisCache)
-}
-
-// TestClose tests the Close method of the ExternalCache interface.
-func TestClose(t *testing.T) {
-	testClose(t, initRedisCache)
 }

@@ -51,9 +51,12 @@ func NewRedisCache(ctx context.Context) (ExternalCache, error) {
 	if err != nil {
 		return nil, err
 	}
+	// initialize the locker
+	locker := redislock.New(client)
 	return &RedisExternalCache{
 		client:        client,
 		subscriptions: make(map[string]*subscription),
+		locker:        locker,
 	}, nil
 }
 
@@ -151,11 +154,12 @@ func (r *RedisExternalCache) Close() error {
 
 func (r *RedisExternalCache) GetLock(ctx context.Context, key string, ttl time.Duration) (releaseLock func() error, err error) {
 	// Attempt to obtain the lock immediately, non-blocking
-	lock, err := r.locker.Obtain(ctx, key, 0, nil) // Set duration to 0 for immediate failure if lock is held
+	lock, err := r.locker.Obtain(ctx, key, ttl, nil) // Set duration to 0 for immediate failure if lock is held
 	if errors.Is(err, redislock.ErrNotObtained) {
 		// Lock is not obtained by the current process, return the error
-		return nil, err
+		return nil, nil
 	} else if err != nil {
+		logger.Printf("failed to acquire lock for key %s: %s", key, err)
 		// An error occurred while trying to obtain the lock
 		return nil, fmt.Errorf("failed to acquire lock for key %s: %w", key, err)
 	}
@@ -163,11 +167,14 @@ func (r *RedisExternalCache) GetLock(ctx context.Context, key string, ttl time.D
 	// Lock was successfully obtained, create the release function
 	releaseLock = func() error {
 		// Release the lock
-		if err := lock.Release(ctx); err != nil {
+		if err := lock.Release(context.TODO()); err != nil {
 			return fmt.Errorf("failed to release lock for key %s: %w", key, err)
 		}
 		return nil
 	}
+
+	// run the release function on context cancel
+	go releaseLockOnContextCancel(ctx, releaseLock)
 
 	return releaseLock, nil
 }
