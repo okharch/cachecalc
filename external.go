@@ -237,7 +237,7 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	lease = cc.startLockLease(calcCtx, lockKey, ownerToken, lockTTL)
 	logger.Printf("thread %v:%s calculating value: %s", thread, key, reason)
 	entry.Lock()                                    // this will be unlocked by calculateValue
-	_ = cc.calculateValue(calcCtx, r, entry, pushValue) // ignore returned value, it is stored to entry, also makes entry.Unlock()
+	_ = cc.calculateValue(calcCtx, r, entry, false) // ignore returned value, it is stored to entry, also makes entry.Unlock()
 	lease.stop()
 	lease = nil
 	if entry.CalcDuration > lockTTL {
@@ -256,11 +256,23 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	}
 	stored, err := cc.externalCache.SetIfLockOwned(calcCtx, lockKey, ownerToken, key, se, cacheTTL)
 	if err != nil {
+		if !replySent.Load() {
+			replySent.Store(true)
+			r.ready <- err
+		}
 		return err
 	}
 	if !stored {
 		logger.Printf("warning: external lock %s was lost before publishing result; skipping external cache update", lockKey)
+		if !replySent.Load() {
+			cc.pushValue(calcCtx, entry, r)
+			replySent.Store(true)
+		}
 		return entry.Err
+	}
+	if !replySent.Load() {
+		cc.pushValue(calcCtx, entry, r)
+		replySent.Store(true)
 	}
 	//logger.Printf("thread %v:%s SET external cache to %v, expires in %dms", thread, r.key, getEntryValue(entry, r), ttl.Milliseconds())
 	err = entry.Err

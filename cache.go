@@ -336,7 +336,7 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	entry.Refresh = now.Add(r.MinTTL)
 	entry.Expire = now.Add(r.MaxTTL)
 	logger.Printf("thread %v,entry %s refresh +%v:%v, expire +%v:%v\n", thread, r.key, r.MinTTL, now.Add(r.MinTTL), r.MaxTTL, now.Add(r.MaxTTL))
-	if !hadValue {
+	if !hadValue && pushValue {
 		cc.pushValue(ctx, entry, r)
 		logger.Printf("thread %v,entry %s value %v has been pushed to ready channel\n", thread, r.key, v)
 	}
