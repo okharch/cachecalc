@@ -23,6 +23,7 @@ const (
 	getValueQuery         = `SELECT value FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1 and expires_at>now()`
 	renewIfValueQuery     = `UPDATE postgres_cache_key_value_expired_v_1_4 SET expires_at = $3 WHERE key = $1 AND value = $2 AND expires_at > now()`
 	deleteIfValueQuery    = `DELETE FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1 AND value = $2`
+	getOwnedLockQuery     = `SELECT 1 FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1 AND value = $2 AND expires_at > now()`
 	deleteKeyQuery        = `DELETE FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1`
 )
 
@@ -133,6 +134,32 @@ func (p *PostgresCache) DelIfValue(ctx context.Context, key string, expectedValu
 		return false, err
 	}
 	return rows > 0, nil
+}
+
+func (p *PostgresCache) SetIfLockOwned(ctx context.Context, lockKey string, expectedLockValue []byte, key string, value []byte, ttl time.Duration) (bool, error) {
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	var owned int
+	err = tx.QueryRowContext(ctx, getOwnedLockQuery, lockKey, expectedLockValue).Scan(&owned)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	expiresAt := time.Now().Add(nzDuration(ttl)).UTC()
+	if _, err = tx.ExecContext(ctx, upsertValueQuery, key, value, expiresAt); err != nil {
+		return false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (p *PostgresCache) Del(ctx context.Context, key string) error {

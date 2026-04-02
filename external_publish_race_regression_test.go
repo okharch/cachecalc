@@ -70,17 +70,6 @@ func newPublishRaceExternalCache(t *testing.T, key string) *publishRaceExternalC
 func (p *publishRaceExternalCache) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if key == p.raceKey && p.armPublishRace {
-		p.armPublishRace = false
-		newer, err := serializeEntry(&CacheEntry{
-			Value:   mustSerializeInt(p.t, 2),
-			Refresh: time.Now().Add(time.Minute),
-			Expire:  time.Now().Add(time.Minute),
-		})
-		require.NoError(p.t, err)
-		p.values[p.raceKey] = newer
-		p.values[p.lockKey] = []byte("owner-b")
-	}
 	p.values[key] = append([]byte(nil), value...)
 	return nil
 }
@@ -112,9 +101,6 @@ func (p *publishRaceExternalCache) ExtendIfValue(ctx context.Context, key string
 	if !exists || string(value) != string(expectedValue) {
 		return false, nil
 	}
-	if key == p.lockKey {
-		p.armPublishRace = true
-	}
 	return true, nil
 }
 
@@ -126,6 +112,28 @@ func (p *publishRaceExternalCache) DelIfValue(ctx context.Context, key string, e
 		return false, nil
 	}
 	delete(p.values, key)
+	return true, nil
+}
+
+func (p *publishRaceExternalCache) SetIfLockOwned(ctx context.Context, lockKey string, expectedLockValue []byte, key string, value []byte, ttl time.Duration) (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if key == p.raceKey && !p.armPublishRace {
+		p.armPublishRace = true
+		newer, err := serializeEntry(&CacheEntry{
+			Value:   mustSerializeInt(p.t, 2),
+			Refresh: time.Now().Add(time.Minute),
+			Expire:  time.Now().Add(time.Minute),
+		})
+		require.NoError(p.t, err)
+		p.values[p.raceKey] = newer
+		p.values[p.lockKey] = []byte("owner-b")
+	}
+	lockValue, exists := p.values[lockKey]
+	if !exists || string(lockValue) != string(expectedLockValue) {
+		return false, nil
+	}
+	p.values[key] = append([]byte(nil), value...)
 	return true, nil
 }
 

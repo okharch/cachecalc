@@ -16,6 +16,7 @@ type scriptedExternalCache struct {
 	getFn   func(context.Context, string) ([]byte, bool, error)
 	extendFn func(context.Context, string, []byte, time.Duration) (bool, error)
 	delIfFn  func(context.Context, string, []byte) (bool, error)
+	setIfLockOwnedFn func(context.Context, string, []byte, string, []byte, time.Duration) (bool, error)
 	delFn   func(context.Context, string) error
 }
 
@@ -50,6 +51,13 @@ func (s *scriptedExternalCache) ExtendIfValue(ctx context.Context, key string, v
 func (s *scriptedExternalCache) DelIfValue(ctx context.Context, key string, value []byte) (bool, error) {
 	if s.delIfFn != nil {
 		return s.delIfFn(ctx, key, value)
+	}
+	return false, nil
+}
+
+func (s *scriptedExternalCache) SetIfLockOwned(ctx context.Context, lockKey string, lockValue []byte, key string, value []byte, ttl time.Duration) (bool, error) {
+	if s.setIfLockOwnedFn != nil {
+		return s.setIfLockOwnedFn(ctx, lockKey, lockValue, key, value, ttl)
 	}
 	return false, nil
 }
@@ -174,6 +182,17 @@ func (m *memoryExternalCache) DelIfValue(ctx context.Context, key string, expect
 		return false, nil
 	}
 	delete(m.values, key)
+	return true, nil
+}
+
+func (m *memoryExternalCache) SetIfLockOwned(ctx context.Context, lockKey string, expectedLockValue []byte, key string, value []byte, ttl time.Duration) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lockValue, exists := m.values[lockKey]
+	if !exists || string(lockValue) != string(expectedLockValue) {
+		return false, nil
+	}
+	m.values[key] = append([]byte(nil), value...)
 	return true, nil
 }
 

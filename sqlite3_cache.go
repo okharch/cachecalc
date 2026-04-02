@@ -140,6 +140,43 @@ func (c *SQLiteCache) DelIfValue(ctx context.Context, key string, expectedValue 
 	return rows > 0, nil
 }
 
+func (c *SQLiteCache) SetIfLockOwned(ctx context.Context, lockKey string, expectedLockValue []byte, key string, value []byte, ttl time.Duration) (bool, error) {
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	var owned int
+	err = tx.QueryRowContext(
+		ctx,
+		"SELECT 1 FROM cache WHERE key = ? AND value = ? AND expiry >= ?",
+		lockKey,
+		expectedLockValue,
+		time.Now().UnixNano(),
+	).Scan(&owned)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	if _, err = tx.ExecContext(
+		ctx,
+		"INSERT OR REPLACE INTO cache (key, value, expiry) VALUES (?, ?, ?)",
+		key,
+		value,
+		time.Now().Add(nzDuration(ttl)).UnixNano(),
+	); err != nil {
+		return false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // Del Removes the specified key. A key is ignored if it does not exist.
 func (c *SQLiteCache) Del(ctx context.Context, key string) error {
 	query := "DELETE FROM cache WHERE key = ?"

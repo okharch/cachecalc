@@ -29,6 +29,9 @@ type ExternalCache interface {
 	// DelIfValue removes the key only if it still stores expectedValue.
 	// Returns true when the key was removed.
 	DelIfValue(ctx context.Context, key string, expectedValue []byte) (bool, error)
+	// SetIfLockOwned stores key/value only if lockKey still stores expectedLockValue.
+	// Returns true when the value was stored.
+	SetIfLockOwned(ctx context.Context, lockKey string, expectedLockValue []byte, key string, value []byte, ttl time.Duration) (bool, error)
 	// Del Removes the specified key. A key is ignored if it does not exist.
 	Del(ctx context.Context, key string) error
 	Close() error // closes the connection

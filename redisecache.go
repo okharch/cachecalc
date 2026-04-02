@@ -22,6 +22,13 @@ end
 return 0
 `)
 
+var setIfLockOwnedScript = redis.NewScript(`
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  return redis.call("SET", KEYS[2], ARGV[2], "PX", ARGV[3]) and 1 or 0
+end
+return 0
+`)
+
 // GetRedis returns redis client which is used internally in this module but can be used otherwise
 // when env variable REDIS_URL is set it uses to connect to redis. Otherwise it tries redis://127.0.0.1.
 // returns redis.Client instance and nil for error on success
@@ -82,6 +89,21 @@ func (r *RedisExternalCache) ExtendIfValue(ctx context.Context, key string, expe
 
 func (r *RedisExternalCache) DelIfValue(ctx context.Context, key string, expectedValue []byte) (bool, error) {
 	result, err := delIfValueScript.Run(ctx, r.client, []string{key}, string(expectedValue)).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+func (r *RedisExternalCache) SetIfLockOwned(ctx context.Context, lockKey string, expectedLockValue []byte, key string, value []byte, ttl time.Duration) (bool, error) {
+	result, err := setIfLockOwnedScript.Run(
+		ctx,
+		r.client,
+		[]string{lockKey, key},
+		string(expectedLockValue),
+		string(value),
+		ttl.Milliseconds(),
+	).Int()
 	if err != nil {
 		return false, err
 	}

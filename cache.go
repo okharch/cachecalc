@@ -51,6 +51,8 @@ type CacheEntry struct {
 type CachedCalculations struct {
 	entries       map[any]*CacheEntry
 	externalCache ExternalCache
+	baseCtx       context.Context
+	cancelBase    context.CancelFunc
 	workers       sync.WaitGroup
 	limitWorkers  chan struct{}
 	sync.Mutex
@@ -76,6 +78,7 @@ func NewCachedCalculations(maxWorkers int, externalCache ExternalCache) *CachedC
 	var cc CachedCalculations
 	cc.entries = make(map[any]*CacheEntry, 1024*16)
 	cc.externalCache = externalCache
+	cc.baseCtx, cc.cancelBase = context.WithCancel(context.Background())
 	cc.limitWorkers = make(chan struct{}, maxWorkers+1)
 	//cc.buf = new(bytes.Buffer)
 	return &cc
@@ -151,6 +154,9 @@ func GetCachedCalcX[T any](cc *CachedCalculations, ctx context.Context, key any,
 // it tries to gracefully interrupt all ongoing calculations using their context
 // when it succeeds in this it removes the record about job
 func (cc *CachedCalculations) Close() {
+	if cc.cancelBase != nil {
+		cc.cancelBase()
+	}
 	cc.Wait()
 	cc.Lock()
 	cc.workers.Wait()
@@ -164,6 +170,25 @@ func (cc *CachedCalculations) Close() {
 	}
 	if cc.externalCache != nil {
 		cc.externalCache.Close()
+	}
+}
+
+func inheritCalcContextValues(base, src context.Context) context.Context {
+	if thread := getThread(src); thread != nil {
+		base = context.WithValue(base, "thread", thread)
+	}
+	return base
+}
+
+func (cc *CachedCalculations) calculationContext(reqCtx context.Context, background bool) (context.Context, context.CancelFunc) {
+	if background {
+		return context.WithCancel(inheritCalcContextValues(cc.baseCtx, reqCtx))
+	}
+	ctx, cancel := context.WithCancel(reqCtx)
+	stopBase := context.AfterFunc(cc.baseCtx, cancel)
+	return ctx, func() {
+		stopBase()
+		cancel()
 	}
 }
 
@@ -205,7 +230,9 @@ func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err 
 		return err
 	}
 	// entry is locked here
-	return cc.calculateValue(ctx, r, entry, true) // unlocks entry
+	calcCtx, cancel := cc.calculationContext(ctx, entry.Expire.After(time.Now()))
+	defer cancel()
+	return cc.calculateValue(calcCtx, r, entry, true) // unlocks entry
 }
 
 // obtainEntry locks local cache and checks whether entry exist.
