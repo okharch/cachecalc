@@ -189,7 +189,11 @@ func (cc *CachedCalculations) obtainLocal(ctx context.Context, r *request) (err 
 			// must not continue lock on entry until entry is being calculated!
 			entry.Unlock()
 			logger.Printf("thread %v:%s,waiting while other thread calculating\n", thread, r.key)
-			<-wait // wait until it was closed
+			select {
+			case <-wait: // wait until it was closed
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 			// read Lock is enough to return value
 			entry.Lock()
 		} else {
