@@ -64,9 +64,14 @@ func (c *SQLiteCache) Set(ctx context.Context, key string, value []byte, ttl tim
 // SETNX is short for "SET if Not eXists".
 // keyCreated must return true if value is set
 func (c *SQLiteCache) SetNX(ctx context.Context, key string, value []byte, ttl time.Duration) (keyCreated bool, err error) {
-	query := "INSERT INTO cache (key, value, expiry) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM cache WHERE key = ?) RETURNING key"
-
 	expiry := time.Now().Add(ttl).UnixNano()
+	deleteQuery := "DELETE FROM cache WHERE key = ? AND expiry < ?"
+	_, err = c.db.ExecContext(ctx, deleteQuery, key, time.Now().UnixNano())
+	if err != nil {
+		return false, err
+	}
+
+	query := "INSERT INTO cache (key, value, expiry) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM cache WHERE key = ?) RETURNING key"
 	var insertedKey string
 
 	err = c.db.QueryRowContext(ctx, query, key, value, expiry, key).Scan(&insertedKey)
