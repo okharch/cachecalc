@@ -21,6 +21,8 @@ const (
 		ON CONFLICT (key) DO UPDATE SET value = $2, expires_at = $3`
 	insertIfNotExistQuery = `INSERT INTO postgres_cache_key_value_expired_v_1_4(key, value, expires_at) VALUES($1, $2, $3)`
 	getValueQuery         = `SELECT value FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1 and expires_at>now()`
+	renewIfValueQuery     = `UPDATE postgres_cache_key_value_expired_v_1_4 SET expires_at = $3 WHERE key = $1 AND value = $2 AND expires_at > now()`
+	deleteIfValueQuery    = `DELETE FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1 AND value = $2`
 	deleteKeyQuery        = `DELETE FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1`
 )
 
@@ -106,6 +108,31 @@ func (p *PostgresCache) Get(ctx context.Context, key string) (value []byte, exis
 	logger.Printf("thread %v: obtained value", thread)
 
 	return value, true, nil
+}
+
+func (p *PostgresCache) ExtendIfValue(ctx context.Context, key string, expectedValue []byte, ttl time.Duration) (bool, error) {
+	expiresAt := time.Now().Add(nzDuration(ttl)).UTC()
+	result, err := p.db.ExecContext(ctx, renewIfValueQuery, key, expectedValue, expiresAt)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows > 0, nil
+}
+
+func (p *PostgresCache) DelIfValue(ctx context.Context, key string, expectedValue []byte) (bool, error) {
+	result, err := p.db.ExecContext(ctx, deleteIfValueQuery, key, expectedValue)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows > 0, nil
 }
 
 func (p *PostgresCache) Del(ctx context.Context, key string) error {

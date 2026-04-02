@@ -284,6 +284,9 @@ func (cc *CachedCalculations) calculateValue(ctx context.Context, r *request, en
 	}
 	r.CachedCalcOpts = opt
 	calcDuration := time.Since(started)
+	if r.MaxTTL > 0 && calcDuration > r.MaxTTL {
+		logger.Printf("warning: calculation for %v took %v which exceeded MaxTTL %v; consider increasing expiry for this key", r.key, calcDuration, r.MaxTTL)
+	}
 	now := time.Now()
 	minTTL := calcDuration * 2
 	if r.MinTTL < minTTL {

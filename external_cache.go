@@ -23,6 +23,12 @@ type ExternalCache interface {
 	// exists will be false If the key does not exist.
 	// An error is returned if the implementor want to signal any errors.
 	Get(ctx context.Context, key string) (value []byte, exists bool, err error)
+	// ExtendIfValue renews the TTL only if the key still stores expectedValue.
+	// Returns true when the caller still owns the key and renewal succeeded.
+	ExtendIfValue(ctx context.Context, key string, expectedValue []byte, ttl time.Duration) (bool, error)
+	// DelIfValue removes the key only if it still stores expectedValue.
+	// Returns true when the key was removed.
+	DelIfValue(ctx context.Context, key string, expectedValue []byte) (bool, error)
 	// Del Removes the specified key. A key is ignored if it does not exist.
 	Del(ctx context.Context, key string) error
 	Close() error // closes the connection

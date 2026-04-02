@@ -8,6 +8,20 @@ import (
 	"time"
 )
 
+var renewIfValueScript = redis.NewScript(`
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+end
+return 0
+`)
+
+var delIfValueScript = redis.NewScript(`
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  return redis.call("DEL", KEYS[1])
+end
+return 0
+`)
+
 // GetRedis returns redis client which is used internally in this module but can be used otherwise
 // when env variable REDIS_URL is set it uses to connect to redis. Otherwise it tries redis://127.0.0.1.
 // returns redis.Client instance and nil for error on success
@@ -56,6 +70,22 @@ func (r *RedisExternalCache) Get(ctx context.Context, key string) (value []byte,
 	exists = true
 	value, err = cmd.Bytes()
 	return
+}
+
+func (r *RedisExternalCache) ExtendIfValue(ctx context.Context, key string, expectedValue []byte, ttl time.Duration) (bool, error) {
+	result, err := renewIfValueScript.Run(ctx, r.client, []string{key}, string(expectedValue), ttl.Milliseconds()).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+func (r *RedisExternalCache) DelIfValue(ctx context.Context, key string, expectedValue []byte) (bool, error) {
+	result, err := delIfValueScript.Run(ctx, r.client, []string{key}, string(expectedValue)).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
 }
 
 func (r *RedisExternalCache) Del(ctx context.Context, key string) error {

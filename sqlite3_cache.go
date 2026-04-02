@@ -114,6 +114,32 @@ func (c *SQLiteCache) Get(ctx context.Context, key string) (value []byte, exists
 	return value, true, nil
 }
 
+func (c *SQLiteCache) ExtendIfValue(ctx context.Context, key string, expectedValue []byte, ttl time.Duration) (bool, error) {
+	query := "UPDATE cache SET expiry = ? WHERE key = ? AND value = ? AND expiry >= ?"
+	result, err := c.db.ExecContext(ctx, query, time.Now().Add(ttl).UnixNano(), key, expectedValue, time.Now().UnixNano())
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows > 0, nil
+}
+
+func (c *SQLiteCache) DelIfValue(ctx context.Context, key string, expectedValue []byte) (bool, error) {
+	query := "DELETE FROM cache WHERE key = ? AND value = ?"
+	result, err := c.db.ExecContext(ctx, query, key, expectedValue)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows > 0, nil
+}
+
 // Del Removes the specified key. A key is ignored if it does not exist.
 func (c *SQLiteCache) Del(ctx context.Context, key string) error {
 	query := "DELETE FROM cache WHERE key = ?"

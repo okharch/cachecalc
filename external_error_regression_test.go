@@ -14,6 +14,8 @@ type scriptedExternalCache struct {
 	setFn   func(context.Context, string, []byte, time.Duration) error
 	setNXFn func(context.Context, string, []byte, time.Duration) (bool, error)
 	getFn   func(context.Context, string) ([]byte, bool, error)
+	extendFn func(context.Context, string, []byte, time.Duration) (bool, error)
+	delIfFn  func(context.Context, string, []byte) (bool, error)
 	delFn   func(context.Context, string) error
 }
 
@@ -36,6 +38,20 @@ func (s *scriptedExternalCache) Get(ctx context.Context, key string) ([]byte, bo
 		return s.getFn(ctx, key)
 	}
 	return nil, false, nil
+}
+
+func (s *scriptedExternalCache) ExtendIfValue(ctx context.Context, key string, value []byte, ttl time.Duration) (bool, error) {
+	if s.extendFn != nil {
+		return s.extendFn(ctx, key, value, ttl)
+	}
+	return false, nil
+}
+
+func (s *scriptedExternalCache) DelIfValue(ctx context.Context, key string, value []byte) (bool, error) {
+	if s.delIfFn != nil {
+		return s.delIfFn(ctx, key, value)
+	}
+	return false, nil
 }
 
 func (s *scriptedExternalCache) Del(ctx context.Context, key string) error {
@@ -137,6 +153,28 @@ func (m *memoryExternalCache) Get(ctx context.Context, key string) ([]byte, bool
 		return nil, false, nil
 	}
 	return append([]byte(nil), value...), true, nil
+}
+
+func (m *memoryExternalCache) ExtendIfValue(ctx context.Context, key string, expectedValue []byte, ttl time.Duration) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value, exists := m.values[key]
+	if !exists || string(value) != string(expectedValue) {
+		return false, nil
+	}
+	m.values[key] = append([]byte(nil), expectedValue...)
+	return true, nil
+}
+
+func (m *memoryExternalCache) DelIfValue(ctx context.Context, key string, expectedValue []byte) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value, exists := m.values[key]
+	if !exists || string(value) != string(expectedValue) {
+		return false, nil
+	}
+	delete(m.values, key)
+	return true, nil
 }
 
 func (m *memoryExternalCache) Del(ctx context.Context, key string) error {
