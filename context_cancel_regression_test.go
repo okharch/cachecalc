@@ -21,6 +21,7 @@ func TestObtainLocalReturnsWhenContextIsCanceledWhileWaiting(t *testing.T) {
 
 	var result int
 	done := make(chan error, 1)
+	called := make(chan struct{}, 1)
 	go func() {
 		done <- cc.obtainLocal(ctx, &request{
 			ctx:   ctx,
@@ -28,13 +29,15 @@ func TestObtainLocalReturnsWhenContextIsCanceledWhileWaiting(t *testing.T) {
 			dest:  &result,
 			ready: make(chan error, 1),
 			calculateValue: func(context.Context) (any, CachedCalcOpts, error) {
-				t.Fatal("calculateValue should not be called while waiting on another computation")
+				called <- struct{}{}
 				return 0, CachedCalcOpts{}, nil
 			},
 		})
 	}()
 
 	select {
+	case <-called:
+		t.Fatal("calculateValue should not be called while waiting on another computation")
 	case err := <-done:
 		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(100 * time.Millisecond):
