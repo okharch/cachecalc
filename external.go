@@ -76,7 +76,7 @@ func (l *lockLease) stop() {
 }
 
 func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (err error) {
-	key := fmt.Sprintf("%v", r.key)
+	key := r.key
 	lockKey := getKeyLock(key)
 	thread := getThread(ctx)
 	logger.Printf("thread %v obtain local entry %s", thread, key)
