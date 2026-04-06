@@ -10,21 +10,22 @@ import (
 )
 
 const (
-	createTableQuery = `CREATE TABLE IF NOT EXISTS postgres_cache_key_value_expired_v_1_4(
+	postgresCacheTableName = "postgres_cache_key_value_expired_v_2_0"
+	createTableQuery       = `CREATE TABLE IF NOT EXISTS ` + postgresCacheTableName + `(
     key text PRIMARY KEY,
     value bytea NOT NULL,
-    expires_at TIMESTAMP)
+    expires_at TIMESTAMPTZ NOT NULL)
 		`
-	deleteExpiredQuery = `delete from postgres_cache_key_value_expired_v_1_4 where expires_at <= now()`
+	deleteExpiredQuery = `delete from ` + postgresCacheTableName + ` where expires_at <= now()`
 
-	upsertValueQuery = `INSERT INTO postgres_cache_key_value_expired_v_1_4(key, value, expires_at) VALUES($1, $2, $3)
+	upsertValueQuery = `INSERT INTO ` + postgresCacheTableName + `(key, value, expires_at) VALUES($1, $2, $3)
 		ON CONFLICT (key) DO UPDATE SET value = $2, expires_at = $3`
-	insertIfNotExistQuery = `INSERT INTO postgres_cache_key_value_expired_v_1_4(key, value, expires_at) VALUES($1, $2, $3)`
-	getValueQuery         = `SELECT value FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1 and expires_at>now()`
-	renewIfValueQuery     = `UPDATE postgres_cache_key_value_expired_v_1_4 SET expires_at = $3 WHERE key = $1 AND value = $2 AND expires_at > now()`
-	deleteIfValueQuery    = `DELETE FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1 AND value = $2`
-	getOwnedLockQuery     = `SELECT 1 FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1 AND value = $2 AND expires_at > now()`
-	deleteKeyQuery        = `DELETE FROM postgres_cache_key_value_expired_v_1_4 WHERE key = $1`
+	insertIfNotExistQuery = `INSERT INTO ` + postgresCacheTableName + `(key, value, expires_at) VALUES($1, $2, $3)`
+	getValueQuery         = `SELECT value FROM ` + postgresCacheTableName + ` WHERE key = $1 and expires_at>now()`
+	renewIfValueQuery     = `UPDATE ` + postgresCacheTableName + ` SET expires_at = $3 WHERE key = $1 AND value = $2 AND expires_at > now()`
+	deleteIfValueQuery    = `DELETE FROM ` + postgresCacheTableName + ` WHERE key = $1 AND value = $2`
+	getOwnedLockQuery     = `SELECT 1 FROM ` + postgresCacheTableName + ` WHERE key = $1 AND value = $2 AND expires_at > now()`
+	deleteKeyQuery        = `DELETE FROM ` + postgresCacheTableName + ` WHERE key = $1`
 )
 
 type PostgresCache struct {

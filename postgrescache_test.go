@@ -29,7 +29,7 @@ func TestPostgresCache(t *testing.T) {
 	cache, err := NewPostgresCache(ctx, dbURL)
 	require.NoError(t, err, "create cache")
 	require.NotNil(t, cache)
-	_, err = cache.(*PostgresCache).db.Exec("truncate postgres_cache_key_value_expired_v_1_4")
+	_, err = cache.(*PostgresCache).db.Exec("truncate " + postgresCacheTableName)
 	require.NoError(t, err, "truncate cache")
 
 	defer func() {
