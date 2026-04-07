@@ -1,96 +1,87 @@
 # Changelog
 
-All notable changes to this project should be documented in this file.
+All notable changes to this project are documented here.
 
-This history is derived from existing git tags plus the current unreleased
-`v2.0.0` work on top of `v1.5.0`.
+## v3.0.0
 
-## v2.0.1
+### Architecture
 
-### Fixes
+- Rebuilt the module around explicit package boundaries:
+  - `smartcache`
+  - `distlock`
+  - `valuestore`
+  - `cluster`
+  - `providers/redis`
+  - `providers/postgres`
+  - `providers/sqlite`
+  - `providers/cluster`
+- Removed the legacy root-level `ExternalCache` architecture.
+- Split distributed locking from shared value storage so hybrid provider
+  combinations are first-class.
 
-- Fixed an atomicity bug in `CachedCalculationsExternalAdapter.SetIfLockOwned`.
-  The leader-side adapter now keeps lock ownership validation and value
-  publication in the same critical section, so a stale owner cannot publish a
-  value after losing the distributed lock.
-- Fixed a lock-order inversion in leader-side expired-entry cleanup.
-  Adapter cleanup now follows the same lock order as
-  `CachedCalculations.RemoveEntries`, preventing a deadlock between expiry
-  cleanup and cache maintenance.
+### Cluster
+
+- Replaced the old internal cluster package with a top-level `cluster` package.
+- Kept the leader/follower model with gRPC transport.
+- Preserved local TCP election.
+- Preserved optional Kubernetes Lease election behind `-tags k8s`.
+- Changed cluster integration to expose separate `valuestore.Store` and
+  `distlock.Provider` roles instead of a single mixed cache interface.
+- Added warm leader promotion through `smartcache.Cache.LocalValues()`, so a
+  newly promoted leader can immediately serve entries it already had warm
+  locally.
+
+### Providers
+
+- Added Redis backend implementing both `valuestore.Store` and
+  `distlock.Backend`.
+- Added PostgreSQL backend implementing both `valuestore.Store` and
+  `distlock.Backend`.
+- Added SQLite backend implementing both `valuestore.Store` and
+  `distlock.Backend`.
+- Added cluster provider binding helper in `providers/cluster`.
 
 ### Tests
 
-- Added a regression test for stale publication after lock loss.
-- Added a regression test for the adapter cleanup deadlock scenario.
+- Added local stale-while-refresh coverage for `smartcache`.
+- Added cross-instance deduplication coverage with separate lock/value
+  providers.
+- Added cluster failover coverage proving that a promoted leader can serve a
+  value it already had warm locally.
+
+### Migration Notes
+
+v3 is a deliberate clean break.
+
+- Old root-package APIs such as `GetCachedCalc`, `CachedCalculations`, and the
+  mixed `ExternalCache` contract were removed.
+- Replace previous usage with:
+  - `smartcache.New(...)`
+  - `smartcache.Get(...)` or `smartcache.GetWithTTL(...)`
+  - explicit `distlock.Provider`
+  - explicit `valuestore.Store`
+- If you previously used the built-in cluster cache, move to:
+  - `cluster.ConfigFromEnv()`
+  - `providers/cluster.Bind(...)`
+- If you previously used Redis/PostgreSQL/SQLite through `ExternalCache`,
+  create the new backend and pass:
+  - `backend.LockProvider()` to `smartcache.Config.Locks`
+  - `backend` to `smartcache.Config.Values`
+
+## v2.0.1
+
+- Fixed an atomicity bug in `CachedCalculationsExternalAdapter.SetIfLockOwned`.
+- Fixed a lock-order inversion in leader-side expired-entry cleanup.
 
 ## v2.0.0
-
-### Highlights
 
 - Added a built-in distributed cluster cache in `internal/cluster`.
 - Added leader/follower `ExternalCache` implementation over gRPC.
 - Added local leader election using TCP bind ownership.
-- Added optional Kubernetes leader election using Lease objects behind `-tags k8s`.
-- Added `cluster.NewClusteredCachedCalculations(...)` as the preferred wiring for
-  distributed smart calculations without Redis/PostgreSQL/SQLite.
-- Added `CachedCalculationsExternalAdapter`, allowing the leader to expose its
-  live local `CachedCalculations` entries as shared L2 cache.
-- Improved leader re-election behavior:
-  - a promoted leader can immediately reuse its own warm local L1 entries as L2
-  - leader value storage no longer needs to be duplicated when using the new
-    clustered helper
-- Added `examples/cluster_calc` demo for multi-instance behavior and failover.
-- Added `Makefile` targets for protobuf generation, build, and test workflows.
-
-### Other Changes
-
-- PostgreSQL tests now skip cleanly when PostgreSQL is unavailable.
-- SQLite cache initialization was hardened for concurrent test access:
-  - single DB connection per handle
-  - WAL mode
-  - busy timeout
-  - normal synchronous mode
-- Cluster and top-level documentation were expanded.
-
-### Migration Notes
-
-- Existing Redis/PostgreSQL/SQLite `ExternalCache` backends remain supported.
-- If you already construct `CachedCalculations` with one of those providers,
-  that usage does not need to change.
-- If you want to replace an external provider with the built-in cluster cache,
-  prefer:
-
-```go
-cfg, err := cluster.ConfigFromEnv()
-if err != nil {
-    panic(err)
-}
-
-cc, dist, err := cluster.NewClusteredCachedCalculations(ctx, 4, cfg)
-if err != nil {
-    panic(err)
-}
-defer cc.Close()
-defer dist.Close()
-```
-
-- For local multi-process deployments:
-  - use `CLUSTER_MODE=local`
-  - use `LEADER_LOCK_PORT` and `GRPC_PORT`
-- For Kubernetes deployments:
-  - build with `-tags k8s`
-  - use `CLUSTER_MODE=k8s`
-  - rely on Lease-based election
-- Cluster mode is a simpler operational option when you do not want to depend on
-  Redis/PostgreSQL/SQLite for distributed coordination.
-- Cluster mode is not replicated durable storage:
-  - leader lock state is not preserved across leader death
-  - only values already warm in the promoted instance's local L1 survive into
-    the new shared L2 view
+- Added optional Kubernetes leader election using Lease objects behind
+  `-tags k8s`.
 
 ## v1.5.0
-
-Derived from tags `v1.5.0` and `1.5.0`.
 
 - Fixed data race conditions.
 

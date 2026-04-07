@@ -1,2 +1,2 @@
 .idea/
-internal/cluster/cachepb/*.pb.go
+cluster/cachepb/*.pb.go

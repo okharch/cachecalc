@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package cachepb;
+
+option go_package = "github.com/okharch/cachecalc/cluster/cachepb";
+
+service ClusterService {
+  rpc GetValue(GetValueRequest) returns (GetValueResponse);
+  rpc PutValue(PutValueRequest) returns (Empty);
+  rpc DeleteValue(DeleteValueRequest) returns (Empty);
+  rpc TryAcquire(TryAcquireRequest) returns (BoolResponse);
+  rpc Renew(RenewRequest) returns (BoolResponse);
+  rpc Release(ReleaseRequest) returns (BoolResponse);
+  rpc Health(Empty) returns (HealthResponse);
+}
+
+message Empty {}
+
+message BoolResponse {
+  bool ok = 1;
+}
+
+message HealthResponse {
+  bool leader = 1;
+}
+
+message GetValueRequest {
+  string key = 1;
+}
+
+message GetValueResponse {
+  bool exists = 1;
+  bytes snapshot = 2;
+}
+
+message PutValueRequest {
+  string key = 1;
+  bytes snapshot = 2;
+}
+
+message DeleteValueRequest {
+  string key = 1;
+}
+
+message TryAcquireRequest {
+  string key = 1;
+  bytes token = 2;
+  int64 ttl_nanos = 3;
+}
+
+message RenewRequest {
+  string key = 1;
+  bytes token = 2;
+  int64 ttl_nanos = 3;
+}
+
+message ReleaseRequest {
+  string key = 1;
+  bytes token = 2;
+}

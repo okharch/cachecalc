@@ -1,116 +1,56 @@
-# ⚡️ SmartCacheCalc
+# SmartCacheCalc v3
 
-🧠 **A smarter alternative to Go’s `singleflight.Group`**  
-With **TTL-based caching**, **background refresh**, and **distributed coordination** via Redis, PostgreSQL, SQLite, or the built-in cluster cache.
+`cachecalc` v3 is a composable smart-calculation cache for Go.
 
----
+The architecture is intentionally split into small, explicit packages:
 
-## 🚀 Overview
+- `smartcache/`
+  Local cache, stale-while-refresh logic, and orchestration.
+- `distlock/`
+  Distributed lock contracts and lock-provider helpers.
+- `valuestore/`
+  Shared cache snapshot contracts.
+- `cluster/`
+  Leader election and gRPC-backed lock/value transport.
+- `providers/redis`
+- `providers/postgres`
+- `providers/sqlite`
+- `providers/cluster`
 
-**SmartCacheCalc** helps backend systems **avoid duplicate expensive calculations** by:
+## Why v3
 
-- ❌ Eliminating **concurrent recomputation** (like Go’s `singleflight`)
-- 📦 **Caching results** with MinTTL / MaxTTL rules
-- 🔄 **Refreshing stale cache entries in the background**
-- 🌍 Coordinating across multiple processes using **external locks/cache backends** (Redis, Postgres, SQLite, built-in cluster mode)
-- 🧩 Drop-in usage via a single function call
+Previous versions centered everything around one mixed external-cache contract.
+That made leader election, distributed locks, and shared value publication too
+tightly coupled.
 
----
+v3 separates those responsibilities:
 
-## 🔧 Problem It Solves
+- `smartcache` owns cache policy
+- `distlock` owns exclusive calculation rights
+- `valuestore` owns shared snapshots
+- providers can be mixed freely
 
-In backend systems, it’s common to:
-- Fetch a heavy list (e.g. countries, product catalog, warehouse prices)
-- Repeat that operation dozens of times per minute
-- Serve essentially **the same result**, wasting CPU and DB resources
+That means hybrid setups are first-class:
 
-**SmartCacheCalc** stops that waste.
+- cluster locks + Redis values
+- PostgreSQL locks + PostgreSQL values
+- SQLite locks + SQLite values
+- cluster locks + cluster values
+- memory locks + memory values
 
-✅ Ensures only **one calculation per key** runs at a time  
-✅ Returns the **cached result immediately** if it’s still valid  
-✅ Starts a **background refresh** if it’s slightly stale  
-✅ Recalculates from scratch only when the cache is **fully expired**
+## Core Concepts
 
----
+`smartcache` uses two time boundaries:
 
-## 🛠️ How It Works
+- `MinTTL`
+  If the value is newer than this, return it immediately.
+- `MaxTTL`
+  If the value is older than this, force a fresh calculation.
 
-### 🔒 1. Distributed Locking (Optional)
+Between those boundaries, the cache returns the current value immediately and
+refreshes it in the background.
 
-If an **external cache** (like Redis/PostgreSQL/SQLite/cluster mode) is provided, it ensures:
-- Only one instance performs the calculation
-- Others wait until the cache is filled
-
-Without external coordination, it works **in-memory only** (faster, but not distributed).
-
----
-
-### 📆 2. Smart Expiration Rules
-
-- **MinTTL**: If recent enough, serve cached value immediately
-- **Stale-but-OK**: Still return cached value, but **trigger refresh in background**
-- **MaxTTL**: If fully expired, force recalculation on next request
-
----
-
-### 💻 3. Simple API
-
-Wrap your existing backend logic like this:
-
-```go
-slowGet := func(ctx context.Context) (any, error) {
-    return fetchExpensiveResult(), nil
-}
-
-result, err := cachecalc.GetCachedCalc(
-    ctx, "my-key",
-    30*time.Second,  // MaxTTL
-    10*time.Second,  // MinTTL
-    true,            // allow background refresh
-    slowGet,
-)
-```
-
-That's it — no boilerplate, no infrastructure gymnastics.
-
----
-
-## 🧭 Built-In Cluster Cache
-
-You can now run distributed smart calculations without depending on Redis,
-PostgreSQL, or SQLite.
-
-The `internal/cluster` package provides:
-
-- leader election
-- gRPC transport between instances
-- a distributed `ExternalCache`
-- a helper that wires `CachedCalculations` directly into the cluster layer
-
-Supported deployment modes:
-
-- `CLUSTER_MODE=local`
-  Uses simple TCP bind ownership for local multi-process deployments.
-- `CLUSTER_MODE=k8s`
-  Uses Kubernetes Lease-based leader election through `client-go`.
-  Build this mode with `-tags k8s`.
-
-### Why use cluster cache instead of Redis/Postgres/SQLite?
-
-- No separate cache service to provision for local deployments or simple clusters
-- The leader can expose its already-warm local smart-cache entries as shared L2
-- On leader re-election, the new leader can immediately reuse its own local L1
-  entries as remote L2 entries for other nodes
-- That reduces duplicate memory on the leader compared to keeping a second
-  leader-only cache copy
-
-Tradeoff:
-
-- This is a simple leader/follower design, not durable replicated storage
-- A promoted leader can reuse only the entries already warm in its own local L1
-- Cluster state is not fully replicated to every node
-
-### Clustered `CachedCalculations` Example
+## Basic Example
 
 ```go
 package main
@@ -120,144 +60,121 @@ import (
     "fmt"
     "time"
 
-    "github.com/okharch/cachecalc"
-    "github.com/okharch/cachecalc/internal/cluster"
+    lockmem "github.com/okharch/cachecalc/distlock/memory"
+    "github.com/okharch/cachecalc/smartcache"
+    vmemory "github.com/okharch/cachecalc/valuestore/memory"
 )
 
 func main() {
-    ctx := context.Background()
+    cache := smartcache.New(smartcache.Config{
+        MaxWorkers: 8,
+        Locks:      lockmem.NewProvider(),
+        Values:     vmemory.New(),
+    })
+    defer cache.Close()
 
-    cfg, err := cluster.ConfigFromEnv()
-    if err != nil {
-        panic(err)
-    }
-
-    cc, distributedCache, err := cluster.NewClusteredCachedCalculations(ctx, 4, cfg)
-    if err != nil {
-        panic(err)
-    }
-    defer cc.Close()
-    defer distributedCache.Close()
-
-    value, err := cachecalc.GetCachedCalcX(
-        cc,
-        ctx,
-        "commodities-v1",
+    value, err := smartcache.GetWithTTL(
+        context.Background(),
+        cache,
+        "catalog:v1",
+        5*time.Second,
         30*time.Second,
-        2*time.Minute,
         true,
         func(ctx context.Context) (string, error) {
-            time.Sleep(2 * time.Second)
-            return fmt.Sprintf("calculated at %s", time.Now().Format(time.RFC3339)), nil
+            time.Sleep(500 * time.Millisecond)
+            return "calculated at " + time.Now().Format(time.RFC3339Nano), nil
         },
     )
     if err != nil {
         panic(err)
     }
 
-    fmt.Println(value, distributedCache.IsLeader(), distributedCache.LeaderAddress())
+    fmt.Println(value)
 }
 ```
 
-### What happens during leader re-election?
+## Hybrid Provider Example
 
-- Exactly one instance is leader at a time
-- Followers proxy `ExternalCache` traffic to the leader over gRPC
-- When the leader dies, another instance can become leader
-- In the new clustered design, the promoted leader can expose its own already
-  warm local `CachedCalculations` entries as L2 immediately
+```go
+redisBackend, err := redis.New(ctx, "")
+if err != nil {
+    panic(err)
+}
+defer redisBackend.Close()
 
-That means leader re-election is warmer than a cold restart:
+cache := smartcache.New(smartcache.Config{
+    MaxWorkers: 8,
+    Locks:      redisBackend.LockProvider(),
+    Values:     redisBackend,
+})
+```
 
-- old leader-specific lock state is lost
-- but the new leader does not necessarily start with an empty shared cache view
-- if it already had the value in local L1, other instances can fetch that value
-  from the new leader right away
+Or split different providers:
 
-For a runnable demo, see:
+```go
+cache := smartcache.New(smartcache.Config{
+    MaxWorkers: 8,
+    Locks:      clusterService.LockProvider(),
+    Values:     redisBackend,
+})
+```
 
-- `examples/cluster_calc`
-- `internal/cluster/README.md`
+## Cluster Provider
 
-For Kubernetes deployments:
+The cluster provider runs one elected leader and proxies followers to it over
+gRPC.
 
-- build with `go build -tags k8s ./...`
-- set `CLUSTER_MODE=k8s`
-- provide the usual in-cluster Kubernetes environment
-- optionally set `LEADER_ADDR`, or let the k8s elector derive it from pod info
+Common wiring:
 
----
+```go
+cache := smartcache.New(smartcache.Config{MaxWorkers: 8})
 
-## 🔍 Real-World Use Cases
+cfg, err := cluster.ConfigFromEnv()
+if err != nil {
+    panic(err)
+}
 
-- 🔁 Token introspection with returned TTL
-- 🌐 Caching third-party API responses
-- 🏪 Product catalog or stock availability
-- 🌍 Country lists or static dictionaries
-- 💱 Exchange rates or slow aggregations
+service, err := providerscluster.Bind(ctx, cache, cfg)
+if err != nil {
+    panic(err)
+}
+defer service.Close()
+defer cache.Close()
+```
 
----
+Advantages of the cluster provider:
 
-## 📦 Installation
+- no separate Redis/PostgreSQL/SQLite dependency for small clusters
+- clean leader/follower transport boundary
+- leader re-election can stay warm
+
+When a new leader is promoted, it can expose its own already-warm
+`cache.LocalValues()` entries as shared L2 values immediately. That means a
+promoted leader does not necessarily start with an empty shared cache view.
+
+Tradeoff:
+
+- cluster state is not durably replicated
+- lock ownership is still lost with the old leader
+- only values already warm on the promoted node survive into the new shared
+  view
+
+See:
+
+- `cluster/README.md`
+- `examples/v3_local`
+- `examples/v3_cluster`
+
+## Build
+
+Generate cluster gRPC code:
 
 ```bash
-go get github.com/okharch/cachecalc
+make proto
 ```
 
-Or import directly:
+Run tests:
 
-```go
-import "github.com/okharch/cachecalc"
+```bash
+make test
 ```
-
----
-
-## 🧪 Example
-
-```go
-func getCommodities(ctx context.Context) (any, error) {
-    return fetchFromDatabase(), nil
-}
-
-result, err := cachecalc.GetCachedCalc(
-    ctx,
-    "commodities-v1",
-    10*time.Minute,  // MaxTTL
-    9*time.Minute,  // MinTTL
-    true,
-    getCommodities,
-)
-```
-
----
-
-## 📝 Notes & Design Philosophy
-
-- ✅ Works **with or without external cache**
-- ✅ Can use the built-in cluster cache instead of Redis/PostgreSQL/SQLite
-- ⏱️ Prefers **latency reduction** over strict freshness
-- 🧠 Encourages re-use and simplicity
-- 🛠️ Optimized for **high-frequency, low-variance data**
-
----
-
-## 🔮 Planned Improvements
-
-- [ ] Let `slowGet` optionally return custom TTLs (e.g. for token expirations)
-- [ ] Add built-in adapters for Redis/PostgreSQL/SQLite
-- [ ] CLI demo tool for experimenting
-
----
-
-## 🏷️ GitHub Topics (for discovery)
-
-```
-go, golang, cache, caching, ttl, redis, token-cache, singleflight, distributed, background-refresh, backend, lock, deduplication, concurrency
-```
-
----
-
-## 💬 Feedback Welcome
-
-This tool was built to solve real bottlenecks in backend systems.  
-If you find it useful or want to contribute — pull requests are welcome!
