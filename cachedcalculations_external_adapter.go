@@ -74,14 +74,18 @@ func (a *CachedCalculationsExternalAdapter) Get(ctx context.Context, key string)
 	if !exists {
 		return nil, false, nil
 	}
-	defer entry.Unlock()
 	if entry.Expire.IsZero() || entry.Expire.Before(time.Now()) {
-		return a.deleteExpiredEntry(key, entry), false, nil
+		entry.Unlock()
+		a.deleteExpiredEntry(key, entry)
+		return nil, false, nil
 	}
 	if a.isRawKey(key) {
-		return append([]byte(nil), entry.Value...), true, nil
+		value := append([]byte(nil), entry.Value...)
+		entry.Unlock()
+		return value, true, nil
 	}
 	buf, err := serializeEntry(entry)
+	entry.Unlock()
 	if err != nil {
 		return nil, false, err
 	}
@@ -187,12 +191,14 @@ func (a *CachedCalculationsExternalAdapter) RemainingTTL(key string) (time.Durat
 	if !exists {
 		return 0, false
 	}
-	defer entry.Unlock()
 	if entry.Expire.IsZero() || entry.Expire.Before(time.Now()) {
+		entry.Unlock()
 		a.deleteExpiredEntry(key, entry)
 		return 0, false
 	}
-	return time.Until(entry.Expire), true
+	ttl := time.Until(entry.Expire)
+	entry.Unlock()
+	return ttl, true
 }
 
 func (a *CachedCalculationsExternalAdapter) obtainEntry(key string) (*CacheEntry, bool) {
@@ -219,17 +225,22 @@ func (a *CachedCalculationsExternalAdapter) obtainOrCreateEntry(key string) *Cac
 	return entry
 }
 
-func (a *CachedCalculationsExternalAdapter) deleteExpiredEntry(key string, entry *CacheEntry) []byte {
-	if entry.wait != nil {
-		return nil
-	}
+func (a *CachedCalculationsExternalAdapter) deleteExpiredEntry(key string, entry *CacheEntry) {
 	a.cc.Lock()
+	defer a.cc.Unlock()
+	current, exists := a.cc.entries[key]
+	if !exists || current != entry {
+		return
+	}
+	current.Lock()
+	defer current.Unlock()
+	if current.wait != nil || current.Expire.IsZero() || current.Expire.After(time.Now()) {
+		return
+	}
 	delete(a.cc.entries, key)
-	a.cc.Unlock()
 	a.metaMu.Lock()
 	delete(a.rawKeys, key)
 	a.metaMu.Unlock()
-	return nil
 }
 
 func (a *CachedCalculationsExternalAdapter) isRawKey(key string) bool {

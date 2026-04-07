@@ -10,16 +10,16 @@ import (
 // CachedCalculations maintenance.
 //
 // Scenario:
-//  1. The adapter observes an expired entry and enters deleteExpiredEntry while
-//     already holding entry.Lock.
+//  1. The adapter observes an expired entry while holding entry.Lock.
 //  2. At the same time, CachedCalculations.RemoveEntries starts a maintenance
 //     pass and holds cc.Lock before trying to lock the same entry.
-//  3. If deleteExpiredEntry then tries to take cc.Lock while RemoveEntries is
-//     waiting on entry.Lock, both goroutines block each other.
+//  3. If the adapter cleanup path keeps entry.Lock while trying to take cc.Lock,
+//     both goroutines block each other.
 //
 // Required behavior:
-// deleteExpiredEntry must not acquire cc.Lock while still holding entry.Lock,
-// or otherwise the adapter and CachedCalculations cleanup paths can deadlock.
+// the adapter must release entry.Lock before trying to acquire cc.Lock for
+// expired-entry cleanup, or otherwise the adapter and CachedCalculations
+// cleanup paths can deadlock.
 func TestCachedCalculationsExternalAdapterDeleteExpiredEntryDoesNotDeadlockWithRemoveEntries(t *testing.T) {
 	cc := NewCachedCalculations(1, nil)
 	defer cc.Close()
@@ -30,14 +30,6 @@ func TestCachedCalculationsExternalAdapterDeleteExpiredEntryDoesNotDeadlockWithR
 	cc.entries[key] = entry
 
 	entry.Lock()
-	defer func() {
-		// Cleanup in case the test fails after proving the deadlock.
-		select {
-		case <-time.After(10 * time.Millisecond):
-		default:
-		}
-		entry.Unlock()
-	}()
 
 	ccLocked := make(chan struct{})
 	removeDone := make(chan struct{})
@@ -54,6 +46,7 @@ func TestCachedCalculationsExternalAdapterDeleteExpiredEntryDoesNotDeadlockWithR
 
 	deleteDone := make(chan struct{})
 	go func() {
+		entry.Unlock()
 		adapter.deleteExpiredEntry(key, entry)
 		close(deleteDone)
 	}()
