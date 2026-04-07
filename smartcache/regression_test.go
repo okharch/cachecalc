@@ -476,10 +476,96 @@ func TestPublishBestEffortDoesNotAdoptOlderSharedSnapshotWithLongerTTL(t *testin
 	}
 }
 
+// TestSharedSnapshotWithCreatedAtDoesNotOverrideNewerLegacyLocalSnapshot
+// documents compatibility with legacy snapshots that do not have CreatedAt set.
+//
+// Scenario:
+//  1. Local cache already contains a newer usable snapshot, but it comes from
+//     legacy data and has CreatedAt == zero.
+//  2. Shared cache contains an older snapshot with CreatedAt populated.
+//  3. A stale local read triggers background refresh, which first reconciles
+//     shared and local state before starting a new calculation.
+//
+// Required behavior:
+// the presence of CreatedAt on the shared snapshot alone must not cause the
+// older shared value to overwrite the newer local value while legacy zero-value
+// snapshots still exist.
+func TestSharedSnapshotWithCreatedAtDoesNotOverrideNewerLegacyLocalSnapshot(t *testing.T) {
+	values := vmemory.New()
+	cache := New(Config{
+		MaxWorkers: 1,
+		Locks:      lockmem.NewProvider(),
+		Values:     values,
+	})
+	defer cache.Close()
+
+	now := time.Now()
+	err := values.Put(context.Background(), "legacy-created-at", valuestore.EntrySnapshot{
+		Value:     mustEncodeString(t, "stable"),
+		CreatedAt: now.Add(-2 * time.Second),
+		RefreshAt: now.Add(-150 * time.Millisecond),
+		ExpireAt:  now.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("seed shared value: %v", err)
+	}
+
+	err = cache.LocalValues().Put(context.Background(), "legacy-created-at", valuestore.EntrySnapshot{
+		Value:     mustEncodeString(t, "fresh"),
+		RefreshAt: now.Add(-50 * time.Millisecond),
+		ExpireAt:  now.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("seed local value: %v", err)
+	}
+
+	backgroundCalcStarted := make(chan struct{})
+	backgroundCalcRelease := make(chan struct{})
+	got, err := Get(context.Background(), cache, "legacy-created-at", false, func(ctx context.Context) (string, Policy, error) {
+		close(backgroundCalcStarted)
+		<-backgroundCalcRelease
+		return "fresh-2", Policy{MinTTL: 20 * time.Millisecond, MaxTTL: 200 * time.Millisecond}, nil
+	})
+	if err != nil {
+		t.Fatalf("trigger read: %v", err)
+	}
+	if got != "fresh" {
+		t.Fatalf("trigger read = %q, want fresh", got)
+	}
+
+	select {
+	case <-backgroundCalcStarted:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("background refresh did not start")
+	}
+
+	local, ok, err := cache.LocalValues().Get(context.Background(), "legacy-created-at")
+	if err != nil || !ok {
+		t.Fatalf("local get during background refresh: ok=%v err=%v", ok, err)
+	}
+	localValue, err := decodeSnapshotValue[string](local)
+	if err != nil {
+		t.Fatalf("decode local value during background refresh: %v", err)
+	}
+	close(backgroundCalcRelease)
+	if localValue != "fresh" {
+		t.Fatalf("local value was overwritten by shared snapshot %q, want fresh", localValue)
+	}
+}
+
 func decodeSnapshotValue[T any](snapshot valuestore.EntrySnapshot) (T, error) {
 	var result T
 	err := decodeValue(snapshot.Value, &result)
 	return result, err
+}
+
+func mustEncodeString(t *testing.T, value string) []byte {
+	t.Helper()
+	buf, err := encodeValue(value)
+	if err != nil {
+		t.Fatalf("encode value %q: %v", value, err)
+	}
+	return buf
 }
 
 type failingStore struct {

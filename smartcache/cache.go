@@ -365,7 +365,7 @@ func shouldAdoptSharedSnapshot(local, shared valuestore.EntrySnapshot) bool {
 	if !local.Usable(time.Now()) {
 		return true
 	}
-	if !local.CreatedAt.IsZero() || !shared.CreatedAt.IsZero() {
+	if !local.CreatedAt.IsZero() && !shared.CreatedAt.IsZero() {
 		return shared.CreatedAt.After(local.CreatedAt)
 	}
 	if local.Error != "" && shared.Error == "" {
