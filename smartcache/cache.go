@@ -100,6 +100,12 @@ func (c *Cache) SetShared(locks distlock.Provider, values valuestore.Store) {
 	c.mu.Unlock()
 }
 
+func (c *Cache) Shared() (distlock.Provider, valuestore.Store) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.locks, c.values
+}
+
 func (c *Cache) LocalValues() valuestore.Store {
 	return c.localValues
 }

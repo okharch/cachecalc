@@ -18,12 +18,14 @@ func Bind(ctx context.Context, cache *smartcache.Cache, cfg cluster.Config) (*cl
 	if localValues == nil {
 		localValues = vmemory.New()
 	}
+	prevLocks, prevValues := cache.Shared()
 	service, err := cluster.New(ctx, cfg, localValues, memory.NewBackend())
 	if err != nil {
 		return nil, err
 	}
 	cache.SetShared(service.LockProvider(), service)
 	if err := waitReady(ctx, service, cfg); err != nil {
+		cache.SetShared(prevLocks, prevValues)
 		_ = service.Close()
 		return nil, err
 	}

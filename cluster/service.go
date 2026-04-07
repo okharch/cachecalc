@@ -73,42 +73,48 @@ func (s *Service) LeaderAddress() string           { return s.elector.LeaderAddr
 func (s *Service) LockProvider() distlock.Provider { return distlock.NewProvider(s) }
 
 func (s *Service) Get(ctx context.Context, key string) (valuestore.EntrySnapshot, bool, error) {
-	if s.isLeader.Load() {
+	if s.withLeaderLocalOp() {
+		defer s.mu.RUnlock()
 		return s.localValues.Get(ctx, key)
 	}
 	return s.values.Get(ctx, key)
 }
 
 func (s *Service) Put(ctx context.Context, key string, entry valuestore.EntrySnapshot) error {
-	if s.isLeader.Load() {
+	if s.withLeaderLocalOp() {
+		defer s.mu.RUnlock()
 		return s.localValues.Put(ctx, key, entry)
 	}
 	return s.values.Put(ctx, key, entry)
 }
 
 func (s *Service) Delete(ctx context.Context, key string) error {
-	if s.isLeader.Load() {
+	if s.withLeaderLocalOp() {
+		defer s.mu.RUnlock()
 		return s.localValues.Delete(ctx, key)
 	}
 	return s.values.Delete(ctx, key)
 }
 
 func (s *Service) TryAcquire(ctx context.Context, key string, token []byte, ttl time.Duration) (bool, error) {
-	if s.isLeader.Load() {
+	if s.withLeaderLocalOp() {
+		defer s.mu.RUnlock()
 		return s.localLocks.TryAcquire(ctx, key, token, ttl)
 	}
 	return s.locks.TryAcquire(ctx, key, token, ttl)
 }
 
 func (s *Service) Renew(ctx context.Context, key string, token []byte, ttl time.Duration) (bool, error) {
-	if s.isLeader.Load() {
+	if s.withLeaderLocalOp() {
+		defer s.mu.RUnlock()
 		return s.localLocks.Renew(ctx, key, token, ttl)
 	}
 	return s.locks.Renew(ctx, key, token, ttl)
 }
 
 func (s *Service) Release(ctx context.Context, key string, token []byte) (bool, error) {
-	if s.isLeader.Load() {
+	if s.withLeaderLocalOp() {
+		defer s.mu.RUnlock()
 		return s.localLocks.Release(ctx, key, token)
 	}
 	return s.locks.Release(ctx, key, token)
@@ -157,6 +163,15 @@ func readinessTimeout(cfg Config) time.Duration {
 		}
 	}
 	return timeout
+}
+
+func (s *Service) withLeaderLocalOp() bool {
+	s.mu.RLock()
+	if s.isLeader.Load() {
+		return true
+	}
+	s.mu.RUnlock()
+	return false
 }
 
 func (s *Service) promote() {
