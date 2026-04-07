@@ -136,6 +136,62 @@ func TestServiceCloseDoesNotBlockIndefinitelyOnSlowLocalBackend(t *testing.T) {
 	<-readDone
 }
 
+// TestServiceCloseDoesNotBlockIndefinitelyOnSlowLeaderMutation documents the
+// remaining shutdown expectation for fenced leader-local mutations.
+//
+// Scenario:
+//  1. A leader-local Put enters a custom local backend and blocks there.
+//  2. Service shutdown begins while that mutation is still blocked.
+//  3. Close internally calls demote, which must transition the service out of
+//     leadership without waiting forever on a wedged backend call.
+//
+// Required behavior:
+// service shutdown should not block indefinitely on a slow or wedged custom
+// leader-local mutation. Otherwise one stuck backend write can freeze demotion
+// and process shutdown.
+func TestServiceCloseDoesNotBlockIndefinitelyOnSlowLeaderMutation(t *testing.T) {
+	backing := vmemory.New()
+	blocking := &blockingStore{
+		Store:   backing,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	service := &Service{
+		localValues: blocking,
+		localLocks:  lockmem.NewBackend(),
+		server:      newGRPCServer("127.0.0.1:0"),
+		values:      newRemoteValueStore(fakeLeaderElector{}, 50*time.Millisecond, 0),
+		locks:       newRemoteLockBackend(fakeLeaderElector{}, 50*time.Millisecond),
+	}
+	service.isLeader.Store(true)
+
+	putDone := make(chan struct{})
+	go func() {
+		_ = service.Put(context.Background(), "slow-close-put", valuestore.EntrySnapshot{
+			Value:    []byte("alpha"),
+			ExpireAt: time.Now().Add(time.Second),
+		})
+		close(putDone)
+	}()
+
+	<-blocking.started
+
+	closeDone := make(chan struct{})
+	go func() {
+		_ = service.Close()
+		close(closeDone)
+	}()
+
+	select {
+	case <-closeDone:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("service.Close blocked on a slow leader-local mutation")
+	}
+
+	close(blocking.release)
+	<-putDone
+}
+
 // TestServiceGetDoesNotReturnOldLeaderLocalValueAfterDemotion documents the
 // read-side fencing requirement during leadership changes.
 //

@@ -131,7 +131,10 @@ func (s *Service) Close() error {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	s.demote()
+	if s.isLeader.Swap(false) {
+		s.roleEpoch.Add(1)
+		s.server.Stop()
+	}
 	if err := s.values.Close(); err != nil {
 		return err
 	}
