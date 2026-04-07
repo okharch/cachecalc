@@ -13,6 +13,7 @@ import (
 // published through ValueStore implementations.
 type EntrySnapshot struct {
 	Value        []byte
+	CreatedAt    time.Time
 	RefreshAt    time.Time
 	ExpireAt     time.Time
 	CalcDuration time.Duration

@@ -365,11 +365,8 @@ func shouldAdoptSharedSnapshot(local, shared valuestore.EntrySnapshot) bool {
 	if !local.Usable(time.Now()) {
 		return true
 	}
-	if shared.RefreshAt.After(local.RefreshAt) {
-		return true
-	}
-	if shared.ExpireAt.After(local.ExpireAt) {
-		return true
+	if !local.CreatedAt.IsZero() || !shared.CreatedAt.IsZero() {
+		return shared.CreatedAt.After(local.CreatedAt)
 	}
 	if local.Error != "" && shared.Error == "" {
 		return true
@@ -415,6 +412,7 @@ func snapshotFromResult(value any, calcErr error, policy Policy, calcDuration ti
 		minTTL = maxTTL
 	}
 	snapshot := valuestore.EntrySnapshot{
+		CreatedAt:    now,
 		RefreshAt:    now.Add(minTTL),
 		ExpireAt:     now.Add(maxTTL),
 		CalcDuration: calcDuration,
@@ -455,6 +453,7 @@ func cloneSnapshot(snapshot valuestore.EntrySnapshot) valuestore.EntrySnapshot {
 func errorSnapshot(err error) valuestore.EntrySnapshot {
 	now := time.Now()
 	return valuestore.EntrySnapshot{
+		CreatedAt: now,
 		Error:     err.Error(),
 		RefreshAt: now.Add(50 * time.Millisecond),
 		ExpireAt:  now.Add(50 * time.Millisecond),

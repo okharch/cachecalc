@@ -34,8 +34,8 @@ func TestServiceDemoteWaitsForInFlightLeaderPut(t *testing.T) {
 		localValues: blocking,
 		localLocks:  lockmem.NewBackend(),
 		server:      newGRPCServer("127.0.0.1:0"),
-		values:      newRemoteValueStore(nil, 50*time.Millisecond, 0),
-		locks:       newRemoteLockBackend(nil, 50*time.Millisecond),
+		values:      newRemoteValueStore(fakeLeaderElector{}, 50*time.Millisecond, 0),
+		locks:       newRemoteLockBackend(fakeLeaderElector{}, 50*time.Millisecond),
 	}
 	service.isLeader.Store(true)
 
@@ -107,8 +107,8 @@ func TestServiceCloseDoesNotBlockIndefinitelyOnSlowLocalBackend(t *testing.T) {
 		localValues: blocking,
 		localLocks:  lockmem.NewBackend(),
 		server:      newGRPCServer("127.0.0.1:0"),
-		values:      newRemoteValueStore(nil, 50*time.Millisecond, 0),
-		locks:       newRemoteLockBackend(nil, 50*time.Millisecond),
+		values:      newRemoteValueStore(fakeLeaderElector{}, 50*time.Millisecond, 0),
+		locks:       newRemoteLockBackend(fakeLeaderElector{}, 50*time.Millisecond),
 	}
 	service.isLeader.Store(true)
 
@@ -135,6 +135,66 @@ func TestServiceCloseDoesNotBlockIndefinitelyOnSlowLocalBackend(t *testing.T) {
 	close(blocking.release)
 	<-readDone
 }
+
+// TestServiceGetDoesNotReturnOldLeaderLocalValueAfterDemotion documents the
+// read-side fencing requirement during leadership changes.
+//
+// Scenario:
+//  1. A Get starts while the service still believes it is leader.
+//  2. Before that local read completes, the service is demoted and another
+//     leader is allowed to take over.
+//  3. The old in-flight Get then resumes.
+//
+// Required behavior:
+// once demotion has taken effect, the old leader must not return its private
+// local value through a Get that started before the transition. Otherwise reads
+// can observe stale leader-local state after authority has moved elsewhere.
+func TestServiceGetDoesNotReturnOldLeaderLocalValueAfterDemotion(t *testing.T) {
+	backing := vmemory.New()
+	_ = backing.Put(context.Background(), "demotion-get", valuestore.EntrySnapshot{
+		Value:    []byte("alpha"),
+		ExpireAt: time.Now().Add(time.Second),
+	})
+	blocking := &blockingStore{
+		Store:   backing,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	service := &Service{
+		localValues: blocking,
+		localLocks:  lockmem.NewBackend(),
+		server:      newGRPCServer("127.0.0.1:0"),
+		values:      newRemoteValueStore(fakeLeaderElector{}, 50*time.Millisecond, 0),
+		locks:       newRemoteLockBackend(fakeLeaderElector{}, 50*time.Millisecond),
+	}
+	service.isLeader.Store(true)
+
+	type getResult struct {
+		snapshot valuestore.EntrySnapshot
+		ok       bool
+		err      error
+	}
+	resultCh := make(chan getResult, 1)
+	go func() {
+		snapshot, ok, err := service.Get(context.Background(), "demotion-get")
+		resultCh <- getResult{snapshot: snapshot, ok: ok, err: err}
+	}()
+
+	<-blocking.started
+	service.isLeader.Store(false)
+	close(blocking.release)
+
+	result := <-resultCh
+	if result.ok {
+		t.Fatal("old leader local value was returned after demotion")
+	}
+}
+
+type fakeLeaderElector struct{}
+
+func (fakeLeaderElector) Start(context.Context, func(), func()) error { return nil }
+func (fakeLeaderElector) IsLeader() bool                              { return false }
+func (fakeLeaderElector) LeaderAddress() string                       { return "" }
 
 type blockingStore struct {
 	valuestore.Store

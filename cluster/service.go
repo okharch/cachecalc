@@ -25,6 +25,7 @@ type Service struct {
 	locks       *remoteLockBackend
 	logger      *log.Logger
 	isLeader    atomic.Bool
+	roleEpoch   atomic.Uint64
 	mu          sync.RWMutex
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -73,10 +74,17 @@ func (s *Service) LeaderAddress() string           { return s.elector.LeaderAddr
 func (s *Service) LockProvider() distlock.Provider { return distlock.NewProvider(s) }
 
 func (s *Service) Get(ctx context.Context, key string) (valuestore.EntrySnapshot, bool, error) {
-	if s.isLeader.Load() {
-		return s.localValues.Get(ctx, key)
+	for {
+		epoch := s.roleEpoch.Load()
+		if s.isLeader.Load() {
+			snapshot, ok, err := s.localValues.Get(ctx, key)
+			if s.isLeader.Load() && s.roleEpoch.Load() == epoch {
+				return snapshot, ok, err
+			}
+			continue
+		}
+		return s.values.Get(ctx, key)
 	}
-	return s.values.Get(ctx, key)
 }
 
 func (s *Service) Put(ctx context.Context, key string, entry valuestore.EntrySnapshot) error {
@@ -184,6 +192,7 @@ func (s *Service) promote() {
 		return
 	}
 	s.isLeader.Store(true)
+	s.roleEpoch.Add(1)
 }
 
 func (s *Service) demote() {
@@ -193,6 +202,7 @@ func (s *Service) demote() {
 		return
 	}
 	s.isLeader.Store(false)
+	s.roleEpoch.Add(1)
 	s.server.Stop()
 	_ = s.values.Close()
 	_ = s.locks.Close()

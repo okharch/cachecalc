@@ -383,6 +383,99 @@ func TestPublishBestEffortDoesNotRollbackLocalValueFromStaleSharedState(t *testi
 	}
 }
 
+// TestPublishBestEffortDoesNotAdoptOlderSharedSnapshotWithLongerTTL documents
+// that snapshot freshness must not be inferred from TTL windows alone.
+//
+// Scenario:
+//  1. Shared cache contains an older value "stable" with a long TTL.
+//  2. Local cache later computes a newer value "fresh" with a shorter TTL, but
+//     best-effort publication fails, so shared state remains on the older value.
+//  3. A later refresh re-reads the older shared snapshot.
+//
+// Required behavior:
+// the cache must not overwrite the newer local value with the older shared one
+// just because the shared snapshot has later RefreshAt/ExpireAt timestamps from
+// a longer TTL policy.
+func TestPublishBestEffortDoesNotAdoptOlderSharedSnapshotWithLongerTTL(t *testing.T) {
+	baseStore := vmemory.New()
+	values := &failingStore{Store: baseStore}
+	cache := New(Config{
+		MaxWorkers: 1,
+		Locks:      lockmem.NewProvider(),
+		Values:     values,
+	})
+	defer cache.Close()
+
+	initial, err := Get(context.Background(), cache, "best-effort-mixed-ttl", false, func(ctx context.Context) (string, Policy, error) {
+		return "stable", Policy{MinTTL: 200 * time.Millisecond, MaxTTL: 600 * time.Millisecond}, nil
+	})
+	if err != nil {
+		t.Fatalf("initial get: %v", err)
+	}
+	if initial != "stable" {
+		t.Fatalf("initial = %q, want stable", initial)
+	}
+
+	time.Sleep(220 * time.Millisecond)
+	values.failPut = true
+	got, err := Get(context.Background(), cache, "best-effort-mixed-ttl", false, func(ctx context.Context) (string, Policy, error) {
+		return "fresh", Policy{MinTTL: 20 * time.Millisecond, MaxTTL: 120 * time.Millisecond}, nil
+	})
+	if err != nil {
+		t.Fatalf("refresh get: %v", err)
+	}
+	if got != "stable" {
+		t.Fatalf("refresh returned %q, want stable", got)
+	}
+	time.Sleep(40 * time.Millisecond)
+
+	local, ok, err := cache.LocalValues().Get(context.Background(), "best-effort-mixed-ttl")
+	if err != nil || !ok {
+		t.Fatalf("local get after failed best-effort publish: ok=%v err=%v", ok, err)
+	}
+	localValue, err := decodeSnapshotValue[string](local)
+	if err != nil {
+		t.Fatalf("decode fresh local value: %v", err)
+	}
+	if localValue != "fresh" {
+		t.Fatalf("local after failed best-effort publish = %q, want fresh", localValue)
+	}
+
+	time.Sleep(40 * time.Millisecond)
+	backgroundCalcStarted := make(chan struct{})
+	backgroundCalcRelease := make(chan struct{})
+	stale, err := Get(context.Background(), cache, "best-effort-mixed-ttl", false, func(ctx context.Context) (string, Policy, error) {
+		close(backgroundCalcStarted)
+		<-backgroundCalcRelease
+		return "fresh-2", Policy{MinTTL: 20 * time.Millisecond, MaxTTL: 120 * time.Millisecond}, nil
+	})
+	if err != nil {
+		t.Fatalf("trigger read: %v", err)
+	}
+	if stale != "fresh" {
+		t.Fatalf("trigger read = %q, want fresh", stale)
+	}
+
+	select {
+	case <-backgroundCalcStarted:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("background refresh did not start")
+	}
+
+	local, ok, err = cache.LocalValues().Get(context.Background(), "best-effort-mixed-ttl")
+	if err != nil || !ok {
+		t.Fatalf("local get during background refresh: ok=%v err=%v", ok, err)
+	}
+	localValue, err = decodeSnapshotValue[string](local)
+	if err != nil {
+		t.Fatalf("decode local value during background refresh: %v", err)
+	}
+	close(backgroundCalcRelease)
+	if localValue != "fresh" {
+		t.Fatalf("local value was overwritten by older shared snapshot %q, want fresh", localValue)
+	}
+}
+
 func decodeSnapshotValue[T any](snapshot valuestore.EntrySnapshot) (T, error) {
 	var result T
 	err := decodeValue(snapshot.Value, &result)
