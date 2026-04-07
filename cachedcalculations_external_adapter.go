@@ -118,17 +118,6 @@ func (a *CachedCalculationsExternalAdapter) DelIfValue(ctx context.Context, key 
 }
 
 func (a *CachedCalculationsExternalAdapter) SetIfLockOwned(ctx context.Context, lockKey string, expectedLockValue []byte, key string, value []byte, ttl time.Duration) (bool, error) {
-	a.metaMu.Lock()
-	lock, ok := a.getLockLocked(lockKey)
-	if !ok || isExpired(lock.deadline) || !equalBytes(lock.value, expectedLockValue) {
-		if ok && isExpired(lock.deadline) {
-			delete(a.locks, lockKey)
-		}
-		a.metaMu.Unlock()
-		return false, nil
-	}
-	a.metaMu.Unlock()
-
 	entry := &CacheEntry{}
 	rawValue := false
 	if err := deserializeEntry(value, entry); err != nil {
@@ -144,12 +133,23 @@ func (a *CachedCalculationsExternalAdapter) SetIfLockOwned(ctx context.Context, 
 
 	target := a.obtainOrCreateEntry(key)
 	defer target.Unlock()
+
+	a.metaMu.Lock()
+	defer a.metaMu.Unlock()
+	lock, ok := a.getLockLocked(lockKey)
+	if !ok || isExpired(lock.deadline) || !equalBytes(lock.value, expectedLockValue) {
+		if ok && isExpired(lock.deadline) {
+			delete(a.locks, lockKey)
+		}
+		return false, nil
+	}
+
 	applyEntrySnapshot(target, entry)
 	if target.wait != nil {
 		close(target.wait)
 		target.wait = nil
 	}
-	a.setRawKey(key, rawValue)
+	a.setRawKeyLocked(key, rawValue)
 	return true, nil
 }
 
@@ -242,6 +242,10 @@ func (a *CachedCalculationsExternalAdapter) isRawKey(key string) bool {
 func (a *CachedCalculationsExternalAdapter) setRawKey(key string, raw bool) {
 	a.metaMu.Lock()
 	defer a.metaMu.Unlock()
+	a.setRawKeyLocked(key, raw)
+}
+
+func (a *CachedCalculationsExternalAdapter) setRawKeyLocked(key string, raw bool) {
 	if raw {
 		a.rawKeys[key] = struct{}{}
 		return
