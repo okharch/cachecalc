@@ -18,6 +18,12 @@ All notable changes to this project are documented here.
 - Removed the legacy root-level `ExternalCache` architecture.
 - Split distributed locking from shared value storage so hybrid provider
   combinations are first-class.
+- Added `smartcache.Policy.PublishMode` with:
+  - `PublishBestEffort` for cache-style shared publication
+  - `PublishRequired` for token/session-like values that are not valid until
+    shared publication succeeds
+- Added `EntrySnapshot.CreatedAt` to track real snapshot recency independently
+  from TTL windows.
 
 ### Cluster
 
@@ -30,6 +36,19 @@ All notable changes to this project are documented here.
 - Added warm leader promotion through `smartcache.Cache.LocalValues()`, so a
   newly promoted leader can immediately serve entries it already had warm
   locally.
+- Added readiness-aware provider helpers so:
+  - low-level `cluster.New(...)` preserves follower startup/retry behavior
+  - `providers/cluster.Bind(...)` and `providers/cluster.NewWithLocal(...)`
+    wait for a usable leader or fail initialization cleanly
+- Added rollback in `providers/cluster.Bind(...)` so failed readiness does not
+  leave the passed `smartcache.Cache` wired to a dead cluster service.
+- Hardened leader/follower transitions:
+  - mutating leader-local operations are fenced across demotion
+  - reads retry across role changes instead of returning old leader-local data
+  - shutdown uses a dedicated path so `Service.Close()` does not block
+    indefinitely on slow custom leader-local mutations
+- Fixed follower read-through cache snapshot aliasing by cloning `[]byte` values
+  on cache store and cache read.
 
 ### Providers
 
@@ -48,6 +67,28 @@ All notable changes to this project are documented here.
   providers.
 - Added cluster failover coverage proving that a promoted leader can serve a
   value it already had warm locally.
+- Added shared contract-style test suites for:
+  - `valuestore.Store`
+  - `distlock.Backend`
+  - composed `smartcache`
+- Added backend-specific coverage for:
+  - memory
+  - Redis
+  - PostgreSQL
+  - SQLite
+- Added regression coverage for edge cases fixed during the v3 hardening pass,
+  including:
+  - stale background refresh not recomputing shared values
+  - lock reacquisition after owner loss
+  - foreground calculation goroutine leaks
+  - startup readiness contracts for cluster constructors
+  - required-publication commit semantics
+  - read-through cache snapshot immutability
+  - bind rollback on readiness failure
+  - demotion fencing for leader-local mutations
+  - shutdown behavior with slow custom local backends
+  - shared/local reconciliation with mixed TTL policies
+  - legacy zero-`CreatedAt` snapshot compatibility
 
 ### Migration Notes
 
@@ -67,6 +108,9 @@ v3 is a deliberate clean break.
   create the new backend and pass:
   - `backend.LockProvider()` to `smartcache.Config.Locks`
   - `backend` to `smartcache.Config.Values`
+- If your values must be visible cluster-wide before they are considered valid,
+  use `smartcache.Get(...)` with `smartcache.Policy{PublishMode:
+  smartcache.PublishRequired}` instead of `GetWithTTL(...)`.
 
 ## v2.0.1
 
