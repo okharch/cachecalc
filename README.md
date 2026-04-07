@@ -50,6 +50,20 @@ That means hybrid setups are first-class:
 Between those boundaries, the cache returns the current value immediately and
 refreshes it in the background.
 
+`smartcache.Policy` also controls how a successful calculation is committed to
+the shared value store:
+
+- `smartcache.PublishBestEffort`
+  The default. A locally successful calculation stays usable even if the shared
+  publish fails.
+- `smartcache.PublishRequired`
+  The new snapshot is committed locally only after the shared publish succeeds.
+  If shared publication fails, the cache keeps the previous local snapshot and
+  the foreground caller gets an error.
+
+Use `PublishRequired` for values where cross-instance divergence is unsafe, such
+as login tokens, rotating credentials, or other externally invalidating values.
+
 ## Basic Example
 
 ```go
@@ -91,6 +105,20 @@ func main() {
 
     fmt.Println(value)
 }
+```
+
+For per-calculation control, use `smartcache.Get(...)` and return a full
+`smartcache.Policy`:
+
+```go
+value, err := smartcache.Get(ctx, cache, "login-token", true, func(ctx context.Context) (string, smartcache.Policy, error) {
+    token, err := login(ctx)
+    return token, smartcache.Policy{
+        MinTTL:      30 * time.Second,
+        MaxTTL:      2 * time.Minute,
+        PublishMode: smartcache.PublishRequired,
+    }, err
+})
 ```
 
 ## Hybrid Provider Example

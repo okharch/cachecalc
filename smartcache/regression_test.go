@@ -2,6 +2,8 @@ package smartcache
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -118,8 +120,233 @@ func TestLockReacquireDoesNotWaitForHourAfterOwnerLoss(t *testing.T) {
 	}
 }
 
+func TestPublishRequiredKeepsPreviousLocalValueWhenSharedPublishFails(t *testing.T) {
+	values := &failingStore{
+		Store:   vmemory.New(),
+		putErr:  errors.New("shared store unavailable"),
+		failPut: true,
+	}
+	cache := New(Config{
+		MaxWorkers: 1,
+		Locks:      lockmem.NewProvider(),
+		Values:     values,
+	})
+	defer cache.Close()
+
+	initial, err := Get(context.Background(), cache, "required-publish", false, func(ctx context.Context) (string, Policy, error) {
+		return "stable", Policy{
+			MinTTL:      20 * time.Millisecond,
+			MaxTTL:      100 * time.Millisecond,
+			PublishMode: PublishBestEffort,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("initial get: %v", err)
+	}
+	if initial != "stable" {
+		t.Fatalf("initial = %q, want stable", initial)
+	}
+
+	time.Sleep(30 * time.Millisecond)
+
+	stale, err := Get(context.Background(), cache, "required-publish", false, func(ctx context.Context) (string, Policy, error) {
+		return "fresh", Policy{
+			MinTTL:      20 * time.Millisecond,
+			MaxTTL:      100 * time.Millisecond,
+			PublishMode: PublishRequired,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("stale read: %v", err)
+	}
+	if stale != "stable" {
+		t.Fatalf("stale read = %q, want stable", stale)
+	}
+
+	time.Sleep(30 * time.Millisecond)
+
+	got, err := Get(context.Background(), cache, "required-publish", false, func(ctx context.Context) (string, Policy, error) {
+		return "fresh", Policy{
+			MinTTL:      20 * time.Millisecond,
+			MaxTTL:      100 * time.Millisecond,
+			PublishMode: PublishBestEffort,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("local value after failed required publish: %v", err)
+	}
+	if got != "stable" {
+		t.Fatalf("local value changed to %q after failed required publish, want stable", got)
+	}
+}
+
+// TestPublishRequiredDoesNotTreatPostPutLeaseLossAsFailedCommit documents the
+// required-publication commit point for a newly calculated snapshot.
+//
+// Scenario:
+//  1. A previous usable local snapshot already exists for the key.
+//  2. A new calculation runs with PublishRequired, so the new snapshot should
+//     become visible locally only once it has been written to the shared value
+//     store.
+//  3. The shared Put succeeds, which means the new snapshot is now globally
+//     visible to other instances.
+//  4. Immediately after that successful Put, the lease is marked lost before
+//     the caller returns.
+//
+// Required behavior:
+// once the shared Put succeeds, the calculation must be treated as committed.
+// Losing the lease after that point must not roll the local instance back to
+// the previous snapshot or return a result that leaves local and shared state
+// inconsistent.
+func TestPublishRequiredDoesNotTreatPostPutLeaseLossAsFailedCommit(t *testing.T) {
+	baseStore := vmemory.New()
+	var currentLease *fakeLease
+	values := &leaseLossAfterPutStore{
+		Store:       baseStore,
+		afterNthPut: 2,
+		afterPut: func() {
+			if currentLease != nil {
+				currentLease.markLost()
+			}
+		},
+	}
+	cache := New(Config{
+		MaxWorkers: 1,
+		Locks: fakeProvider{
+			acquire: func() distlock.Lease {
+				currentLease = &fakeLease{lost: make(chan struct{})}
+				return currentLease
+			},
+		},
+		Values: values,
+	})
+	defer cache.Close()
+
+	initial, err := Get(context.Background(), cache, "publish-required-lease-loss", false, func(ctx context.Context) (string, Policy, error) {
+		return "stable", Policy{
+			MinTTL:      20 * time.Millisecond,
+			MaxTTL:      100 * time.Millisecond,
+			PublishMode: PublishBestEffort,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("initial get: %v", err)
+	}
+	if initial != "stable" {
+		t.Fatalf("initial = %q, want stable", initial)
+	}
+
+	time.Sleep(30 * time.Millisecond)
+
+	stale, err := Get(context.Background(), cache, "publish-required-lease-loss", false, func(ctx context.Context) (string, Policy, error) {
+		return "fresh", Policy{
+			MinTTL:      20 * time.Millisecond,
+			MaxTTL:      100 * time.Millisecond,
+			PublishMode: PublishRequired,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("stale read: %v", err)
+	}
+	if stale != "stable" {
+		t.Fatalf("stale read = %q, want stable", stale)
+	}
+
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		current, ok, err := baseStore.Get(context.Background(), "publish-required-lease-loss")
+		if err != nil {
+			t.Fatalf("shared get: %v", err)
+		}
+		if ok {
+			got, err := decodeSnapshotValue[string](current)
+			if err != nil {
+				t.Fatalf("decode shared value: %v", err)
+			}
+			if got == "fresh" {
+				local, ok, err := cache.LocalValues().Get(context.Background(), "publish-required-lease-loss")
+				if err != nil {
+					t.Fatalf("local get: %v", err)
+				}
+				if !ok {
+					t.Fatal("local value missing after shared commit")
+				}
+				localValue, err := decodeSnapshotValue[string](local)
+				if err != nil {
+					t.Fatalf("decode local value: %v", err)
+				}
+				if localValue != "fresh" {
+					t.Fatalf("shared value committed as fresh while local stayed %q", localValue)
+				}
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatal("shared value was never updated to fresh")
+}
+
 func decodeSnapshotValue[T any](snapshot valuestore.EntrySnapshot) (T, error) {
 	var result T
 	err := decodeValue(snapshot.Value, &result)
 	return result, err
+}
+
+type failingStore struct {
+	valuestore.Store
+	putErr  error
+	failPut bool
+}
+
+func (s *failingStore) Put(ctx context.Context, key string, entry valuestore.EntrySnapshot) error {
+	if s.failPut {
+		return s.putErr
+	}
+	return s.Store.Put(ctx, key, entry)
+}
+
+type fakeProvider struct {
+	acquire func() distlock.Lease
+}
+
+func (p fakeProvider) Acquire(context.Context, string, time.Duration) (distlock.Lease, bool, error) {
+	return p.acquire(), true, nil
+}
+
+type fakeLease struct {
+	once sync.Once
+	lost chan struct{}
+}
+
+func (l *fakeLease) Lost() <-chan struct{} {
+	return l.lost
+}
+
+func (l *fakeLease) Release(context.Context) error {
+	l.markLost()
+	return nil
+}
+
+func (l *fakeLease) markLost() {
+	l.once.Do(func() {
+		close(l.lost)
+	})
+}
+
+type leaseLossAfterPutStore struct {
+	valuestore.Store
+	puts        atomic.Int32
+	afterNthPut int32
+	afterPut    func()
+}
+
+func (s *leaseLossAfterPutStore) Put(ctx context.Context, key string, entry valuestore.EntrySnapshot) error {
+	if err := s.Store.Put(ctx, key, entry); err != nil {
+		return err
+	}
+	if s.afterPut != nil && s.puts.Add(1) == s.afterNthPut {
+		s.afterPut()
+	}
+	return nil
 }

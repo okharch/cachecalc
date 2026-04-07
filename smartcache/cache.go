@@ -11,11 +11,19 @@ import (
 	"github.com/okharch/cachecalc/valuestore"
 )
 
+type PublishMode int
+
+const (
+	PublishBestEffort PublishMode = iota
+	PublishRequired
+)
+
 // Policy controls when a value is served, refreshed, and fully expired.
 type Policy struct {
-	MinTTL   time.Duration
-	MaxTTL   time.Duration
-	CalcTime time.Duration
+	MinTTL      time.Duration
+	MaxTTL      time.Duration
+	CalcTime    time.Duration
+	PublishMode PublishMode
 }
 
 type CalculateValue[T any] func(context.Context) (T, error)
@@ -240,10 +248,25 @@ func (c *Cache) refresh(key string, entry *localEntry, wait chan struct{}, req *
 		c.storeLocal(entry, errorSnapshot(snapErr))
 		return
 	}
+
+	previous := c.localSnapshot(entry)
+	if policy.PublishMode == PublishRequired {
+		if err := c.publishRequired(req.ctx, key, snapshot, lease); err != nil {
+			if background && previous.Usable(time.Now()) {
+				c.storeLocal(entry, previous)
+				return
+			}
+			c.storeLocal(entry, errorSnapshot(err))
+			return
+		}
+		c.storeLocal(entry, snapshot)
+		return
+	}
+
 	c.storeLocal(entry, snapshot)
 	if c.values != nil && !leaseLost(lease) {
-		if err := c.values.Put(req.ctx, key, snapshot); err != nil && !background {
-			c.storeLocal(entry, errorSnapshot(err))
+		if err := c.values.Put(req.ctx, key, snapshot); err != nil {
+			c.logf("publish shared snapshot for %q: %v", key, err)
 			return
 		}
 	}
@@ -309,6 +332,25 @@ func (c *Cache) storeLocal(entry *localEntry, snapshot valuestore.EntrySnapshot)
 	entry.mu.Unlock()
 }
 
+func (c *Cache) localSnapshot(entry *localEntry) valuestore.EntrySnapshot {
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	return cloneSnapshot(entry.snapshot)
+}
+
+func (c *Cache) publishRequired(ctx context.Context, key string, snapshot valuestore.EntrySnapshot, lease distlock.Lease) error {
+	if c.values == nil {
+		return errors.New("shared value store is required for PublishRequired")
+	}
+	if leaseLost(lease) {
+		return errors.New("lease lost before shared publication")
+	}
+	if err := c.values.Put(ctx, key, snapshot); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (c *Cache) entryFor(key string) *localEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -325,6 +367,12 @@ func normalizeLockTTL(ttl time.Duration) time.Duration {
 		return ttl
 	}
 	return time.Second
+}
+
+func (c *Cache) logf(format string, args ...any) {
+	if c.logger != nil {
+		c.logger.Printf(format, args...)
+	}
 }
 
 func snapshotFromResult(value any, calcErr error, policy Policy, calcDuration time.Duration) (valuestore.EntrySnapshot, error) {

@@ -58,7 +58,7 @@ func (s *remoteValueStore) Get(ctx context.Context, key string) (valuestore.Entr
 		return valuestore.EntrySnapshot{}, false, err
 	}
 	s.setCached(key, entry)
-	return entry, true, nil
+	return cloneEntrySnapshot(entry), true, nil
 }
 
 func (s *remoteValueStore) Put(ctx context.Context, key string, entry valuestore.EntrySnapshot) error {
@@ -150,7 +150,7 @@ func (s *remoteValueStore) getCached(key string) (valuestore.EntrySnapshot, bool
 		delete(s.cache, key)
 		return valuestore.EntrySnapshot{}, false
 	}
-	return entry.snapshot, true
+	return cloneEntrySnapshot(entry.snapshot), true
 }
 
 func (s *remoteValueStore) setCached(key string, entry valuestore.EntrySnapshot) {
@@ -165,7 +165,7 @@ func (s *remoteValueStore) setCached(key string, entry valuestore.EntrySnapshot)
 		ttl = s.cacheTTL
 	}
 	s.mu.Lock()
-	s.cache[key] = readThroughEntry{snapshot: entry, deadline: time.Now().Add(ttl)}
+	s.cache[key] = readThroughEntry{snapshot: cloneEntrySnapshot(entry), deadline: time.Now().Add(ttl)}
 	s.mu.Unlock()
 }
 
@@ -173,6 +173,11 @@ func (s *remoteValueStore) invalidate(key string) {
 	s.mu.Lock()
 	delete(s.cache, key)
 	s.mu.Unlock()
+}
+
+func cloneEntrySnapshot(entry valuestore.EntrySnapshot) valuestore.EntrySnapshot {
+	entry.Value = append([]byte(nil), entry.Value...)
+	return entry
 }
 
 type remoteLockBackend struct {
