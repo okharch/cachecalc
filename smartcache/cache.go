@@ -201,9 +201,13 @@ func (c *Cache) refresh(key string, entry *localEntry, wait chan struct{}, req *
 		entry.mu.Unlock()
 	}()
 
+	current := c.localSnapshot(entry)
 	if snapshot, ok, err := c.getShared(req.ctx, key); err == nil && ok {
-		c.storeLocal(entry, snapshot)
-		if snapshot.Fresh(time.Now()) {
+		if shouldAdoptSharedSnapshot(current, snapshot) {
+			c.storeLocal(entry, snapshot)
+			current = snapshot
+		}
+		if current.Fresh(time.Now()) {
 			return
 		}
 	} else if err != nil && !background {
@@ -355,6 +359,22 @@ func (c *Cache) publishRequired(ctx context.Context, key string, snapshot values
 		return err
 	}
 	return nil
+}
+
+func shouldAdoptSharedSnapshot(local, shared valuestore.EntrySnapshot) bool {
+	if !local.Usable(time.Now()) {
+		return true
+	}
+	if shared.RefreshAt.After(local.RefreshAt) {
+		return true
+	}
+	if shared.ExpireAt.After(local.ExpireAt) {
+		return true
+	}
+	if local.Error != "" && shared.Error == "" {
+		return true
+	}
+	return false
 }
 
 func (c *Cache) entryFor(key string) *localEntry {

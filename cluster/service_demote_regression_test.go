@@ -83,10 +83,69 @@ func TestServiceDemoteWaitsForInFlightLeaderPut(t *testing.T) {
 	}
 }
 
+// TestServiceCloseDoesNotBlockIndefinitelyOnSlowLocalBackend documents the
+// shutdown expectation for services that use custom leader-local stores.
+//
+// Scenario:
+//  1. A leader-local operation enters a custom local backend and blocks there.
+//  2. Service shutdown begins while that backend call is still blocked.
+//  3. Close internally calls demote, which currently waits for the in-flight
+//     leader-local operation because it holds the service read lock.
+//
+// Required behavior:
+// service shutdown should not block indefinitely on a slow or wedged custom
+// leader-local backend. Otherwise one stuck backend call can freeze demotion
+// and process shutdown.
+func TestServiceCloseDoesNotBlockIndefinitelyOnSlowLocalBackend(t *testing.T) {
+	backing := vmemory.New()
+	blocking := &blockingStore{
+		Store:   backing,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	service := &Service{
+		localValues: blocking,
+		localLocks:  lockmem.NewBackend(),
+		server:      newGRPCServer("127.0.0.1:0"),
+		values:      newRemoteValueStore(nil, 50*time.Millisecond, 0),
+		locks:       newRemoteLockBackend(nil, 50*time.Millisecond),
+	}
+	service.isLeader.Store(true)
+
+	readDone := make(chan struct{})
+	go func() {
+		_, _, _ = service.Get(context.Background(), "slow-close")
+		close(readDone)
+	}()
+
+	<-blocking.started
+
+	closeDone := make(chan struct{})
+	go func() {
+		_ = service.Close()
+		close(closeDone)
+	}()
+
+	select {
+	case <-closeDone:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("service.Close blocked on a slow local backend")
+	}
+
+	close(blocking.release)
+	<-readDone
+}
+
 type blockingStore struct {
 	valuestore.Store
 	started chan struct{}
 	release chan struct{}
+}
+
+func (s *blockingStore) Get(ctx context.Context, key string) (valuestore.EntrySnapshot, bool, error) {
+	close(s.started)
+	<-s.release
+	return s.Store.Get(ctx, key)
 }
 
 func (s *blockingStore) Put(ctx context.Context, key string, entry valuestore.EntrySnapshot) error {

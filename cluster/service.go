@@ -73,8 +73,7 @@ func (s *Service) LeaderAddress() string           { return s.elector.LeaderAddr
 func (s *Service) LockProvider() distlock.Provider { return distlock.NewProvider(s) }
 
 func (s *Service) Get(ctx context.Context, key string) (valuestore.EntrySnapshot, bool, error) {
-	if s.withLeaderLocalOp() {
-		defer s.mu.RUnlock()
+	if s.isLeader.Load() {
 		return s.localValues.Get(ctx, key)
 	}
 	return s.values.Get(ctx, key)

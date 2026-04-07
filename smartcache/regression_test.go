@@ -287,6 +287,102 @@ func TestPublishRequiredDoesNotTreatPostPutLeaseLossAsFailedCommit(t *testing.T)
 	t.Fatal("shared value was never updated to fresh")
 }
 
+// TestPublishBestEffortDoesNotRollbackLocalValueFromStaleSharedState documents
+// the local-commit semantics of best-effort publication.
+//
+// Scenario:
+//  1. A first calculation publishes "stable" to both local and shared cache.
+//  2. A later calculation produces a newer local value "fresh", but its shared
+//     Put fails, so shared cache still contains the older "stable" snapshot.
+//  3. Another stale read triggers a background refresh while the newer local
+//     value is still usable.
+//  4. That background refresh re-reads the older shared snapshot before its new
+//     calculation finishes.
+//
+// Required behavior:
+// best-effort publication may leave local state newer than shared state, but a
+// later refresh must not roll local state backward by blindly copying the stale
+// shared snapshot back into the local cache.
+func TestPublishBestEffortDoesNotRollbackLocalValueFromStaleSharedState(t *testing.T) {
+	baseStore := vmemory.New()
+	values := &failingStore{Store: baseStore}
+	cache := New(Config{
+		MaxWorkers: 1,
+		Locks:      lockmem.NewProvider(),
+		Values:     values,
+	})
+	defer cache.Close()
+
+	initial, err := Get(context.Background(), cache, "best-effort-rollback", false, func(ctx context.Context) (string, Policy, error) {
+		return "stable", Policy{MinTTL: 20 * time.Millisecond, MaxTTL: 200 * time.Millisecond}, nil
+	})
+	if err != nil {
+		t.Fatalf("initial get: %v", err)
+	}
+	if initial != "stable" {
+		t.Fatalf("initial = %q, want stable", initial)
+	}
+
+	time.Sleep(30 * time.Millisecond)
+	values.failPut = true
+	fresh, err := Get(context.Background(), cache, "best-effort-rollback", false, func(ctx context.Context) (string, Policy, error) {
+		return "fresh", Policy{MinTTL: 20 * time.Millisecond, MaxTTL: 200 * time.Millisecond}, nil
+	})
+	if err != nil {
+		t.Fatalf("fresh get: %v", err)
+	}
+	if fresh != "stable" {
+		t.Fatalf("stale read before recompute = %q, want stable", fresh)
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	local, ok, err := cache.LocalValues().Get(context.Background(), "best-effort-rollback")
+	if err != nil || !ok {
+		t.Fatalf("local get after failed publish: ok=%v err=%v", ok, err)
+	}
+	localValue, err := decodeSnapshotValue[string](local)
+	if err != nil {
+		t.Fatalf("decode fresh local value: %v", err)
+	}
+	if localValue != "fresh" {
+		t.Fatalf("local after failed publish = %q, want fresh", localValue)
+	}
+
+	time.Sleep(30 * time.Millisecond)
+	backgroundCalcStarted := make(chan struct{})
+	backgroundCalcRelease := make(chan struct{})
+	got, err := Get(context.Background(), cache, "best-effort-rollback", false, func(ctx context.Context) (string, Policy, error) {
+		close(backgroundCalcStarted)
+		<-backgroundCalcRelease
+		return "fresh-2", Policy{MinTTL: 20 * time.Millisecond, MaxTTL: 200 * time.Millisecond}, nil
+	})
+	if err != nil {
+		t.Fatalf("trigger background refresh: %v", err)
+	}
+	if got != "fresh" {
+		t.Fatalf("trigger read = %q, want fresh", got)
+	}
+
+	select {
+	case <-backgroundCalcStarted:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("background refresh did not start")
+	}
+
+	local, ok, err = cache.LocalValues().Get(context.Background(), "best-effort-rollback")
+	if err != nil || !ok {
+		t.Fatalf("local get during background refresh: ok=%v err=%v", ok, err)
+	}
+	localValue, err = decodeSnapshotValue[string](local)
+	if err != nil {
+		t.Fatalf("decode local value during background refresh: %v", err)
+	}
+	close(backgroundCalcRelease)
+	if localValue != "fresh" {
+		t.Fatalf("local value rolled back to %q during background refresh, want fresh", localValue)
+	}
+}
+
 func decodeSnapshotValue[T any](snapshot valuestore.EntrySnapshot) (T, error) {
 	var result T
 	err := decodeValue(snapshot.Value, &result)
