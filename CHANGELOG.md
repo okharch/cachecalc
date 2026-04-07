@@ -5,6 +5,24 @@ All notable changes to this project should be documented in this file.
 This history is derived from existing git tags plus the current unreleased
 `v2.0.0` work on top of `v1.5.0`.
 
+## v2.0.1
+
+### Fixes
+
+- Fixed an atomicity bug in `CachedCalculationsExternalAdapter.SetIfLockOwned`.
+  The leader-side adapter now keeps lock ownership validation and value
+  publication in the same critical section, so a stale owner cannot publish a
+  value after losing the distributed lock.
+- Fixed a lock-order inversion in leader-side expired-entry cleanup.
+  Adapter cleanup now follows the same lock order as
+  `CachedCalculations.RemoveEntries`, preventing a deadlock between expiry
+  cleanup and cache maintenance.
+
+### Tests
+
+- Added a regression test for stale publication after lock loss.
+- Added a regression test for the adapter cleanup deadlock scenario.
+
 ## v2.0.0
 
 ### Highlights
