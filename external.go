@@ -245,15 +245,18 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	}
 	// serialize and set external cache to the latest value
 	entry.Lock()
-	defer entry.Unlock()
 	cacheTTL := time.Until(entry.Expire)
 	if cacheTTL <= 0 {
 		cacheTTL = lockTTL
 	}
 	se, err := serializeEntry(entry)
 	if err != nil {
+		entry.Unlock()
 		return err
 	}
+	entryErr := entry.Err
+	entryValue := append([]byte(nil), entry.Value...)
+	entry.Unlock()
 	stored, err := cc.externalCache.SetIfLockOwned(calcCtx, lockKey, ownerToken, key, se, cacheTTL)
 	if err != nil {
 		if !replySent.Load() {
@@ -265,17 +268,25 @@ func (cc *CachedCalculations) obtainExternal(ctx context.Context, r *request) (e
 	if !stored {
 		logger.Printf("warning: external lock %s was lost before publishing result; skipping external cache update", lockKey)
 		if !replySent.Load() {
-			cc.pushValue(calcCtx, entry, r)
 			replySent.Store(true)
+			if entryErr != nil {
+				r.ready <- entryErr
+			} else {
+				r.ready <- deserialize(entryValue, r.dest)
+			}
 		}
-		return entry.Err
+		return entryErr
 	}
 	if !replySent.Load() {
-		cc.pushValue(calcCtx, entry, r)
 		replySent.Store(true)
+		if entryErr != nil {
+			r.ready <- entryErr
+		} else {
+			r.ready <- deserialize(entryValue, r.dest)
+		}
 	}
 	//logger.Printf("thread %v:%s SET external cache to %v, expires in %dms", thread, r.key, getEntryValue(entry, r), ttl.Milliseconds())
-	err = entry.Err
+	err = entryErr
 	return err
 }
 

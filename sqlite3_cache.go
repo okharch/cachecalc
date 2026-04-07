@@ -19,10 +19,23 @@ func NewSQLiteCache(dbPath string) (*SQLiteCache, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	err = db.Ping()
 	if err != nil {
 		return nil, err
+	}
+
+	pragmas := []string{
+		"PRAGMA busy_timeout = 5000",
+		"PRAGMA journal_mode = WAL",
+		"PRAGMA synchronous = NORMAL",
+	}
+	for _, pragma := range pragmas {
+		if _, err = db.Exec(pragma); err != nil {
+			return nil, err
+		}
 	}
 
 	// create the cache table if it does not exist

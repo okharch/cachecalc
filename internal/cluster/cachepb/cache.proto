@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package cachepb;
+
+option go_package = "github.com/okharch/cachecalc/internal/cluster/cachepb;cachepb";
+
+service CacheService {
+  rpc Set(SetRequest) returns (Empty);
+  rpc SetNX(SetNXRequest) returns (SetNXResponse);
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc ExtendIfValue(ExtendRequest) returns (BoolResponse);
+  rpc DelIfValue(DelIfValueRequest) returns (BoolResponse);
+  rpc SetIfLockOwned(SetIfLockOwnedRequest) returns (BoolResponse);
+  rpc Del(DelRequest) returns (Empty);
+  rpc Health(Empty) returns (HealthResponse);
+}
+
+message Empty {}
+
+message SetRequest {
+  string key = 1;
+  bytes value = 2;
+  int64 ttl_nanos = 3;
+}
+
+message SetNXRequest {
+  string key = 1;
+  bytes value = 2;
+  int64 ttl_nanos = 3;
+}
+
+message SetNXResponse {
+  bool created = 1;
+}
+
+message GetRequest {
+  string key = 1;
+}
+
+message GetResponse {
+  bytes value = 1;
+  bool exists = 2;
+  int64 ttl_remaining_nanos = 3;
+}
+
+message ExtendRequest {
+  string key = 1;
+  bytes expected_value = 2;
+  int64 ttl_nanos = 3;
+}
+
+message DelIfValueRequest {
+  string key = 1;
+  bytes expected_value = 2;
+}
+
+message SetIfLockOwnedRequest {
+  string lock_key = 1;
+  bytes expected_lock_value = 2;
+  string key = 3;
+  bytes value = 4;
+  int64 ttl_nanos = 5;
+}
+
+message DelRequest {
+  string key = 1;
+}
+
+message BoolResponse {
+  bool ok = 1;
+}
+
+message HealthResponse {
+  bool leader = 1;
+  string leader_address = 2;
+}

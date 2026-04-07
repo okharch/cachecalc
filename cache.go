@@ -59,6 +59,16 @@ type CachedCalculations struct {
 	sync.WaitGroup
 }
 
+// SetExternalCache replaces the external coordination backend used by this
+// CachedCalculations instance. It is intended for advanced wiring such as the
+// cluster package, where the distributed cache wrapper is created after the
+// local calculations cache.
+func (cc *CachedCalculations) SetExternalCache(externalCache ExternalCache) {
+	cc.Lock()
+	defer cc.Unlock()
+	cc.externalCache = externalCache
+}
+
 func getKeyLock(key string) string {
 	return key + ".lock"
 }

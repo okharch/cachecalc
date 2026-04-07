@@ -1,1 +1,2 @@
 .idea/
+internal/cluster/cachepb/*.pb.go

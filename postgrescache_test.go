@@ -27,7 +27,9 @@ func TestPostgresCache(t *testing.T) {
 	dbURL := PostgreUrl()
 	logger.Println("TestPostgresCache...")
 	cache, err := NewPostgresCache(ctx, dbURL)
-	require.NoError(t, err, "create cache")
+	if err != nil {
+		t.Skipf("skip test due external cache not available: %s", err)
+	}
 	require.NotNil(t, cache)
 	_, err = cache.(*PostgresCache).db.Exec("truncate " + postgresCacheTableName)
 	require.NoError(t, err, "truncate cache")
