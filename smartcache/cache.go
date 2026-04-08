@@ -3,7 +3,9 @@ package smartcache
 import (
 	"context"
 	"errors"
+	"hash/fnv"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -47,10 +49,14 @@ type Config struct {
 	// MaxWorkers limits concurrent calculations when positive. Zero or negative
 	// disables worker limiting entirely.
 	MaxWorkers int
-	LockTTL    time.Duration
-	Locks      distlock.Provider
-	Values     valuestore.Store
-	Logger     *log.Logger
+	// GlobalMaxWorkers limits concurrent calculations across all caches sharing
+	// the same distributed lock provider. Zero or negative disables the global
+	// limit. Without a distributed lock provider, this setting has no effect.
+	GlobalMaxWorkers int
+	LockTTL          time.Duration
+	Locks            distlock.Provider
+	Values           valuestore.Store
+	Logger           *log.Logger
 }
 
 // Cache coordinates local singleflight, TTL decisions, and optional shared
@@ -63,6 +69,7 @@ type Cache struct {
 	baseCtx     context.Context
 	cancel      context.CancelFunc
 	workerSem   chan struct{}
+	globalSlots int
 	workers     sync.WaitGroup
 	logger      *log.Logger
 	localValues valuestore.Store
@@ -82,6 +89,9 @@ func New(cfg Config) *Cache {
 	}
 	if cfg.MaxWorkers > 0 {
 		c.workerSem = make(chan struct{}, cfg.MaxWorkers)
+	}
+	if cfg.GlobalMaxWorkers > 0 {
+		c.globalSlots = cfg.GlobalMaxWorkers
 	}
 	c.localValues = &localValueStore{cache: c}
 	return c
@@ -239,6 +249,18 @@ func (c *Cache) refresh(key string, entry *localEntry, wait chan struct{}, req *
 	}
 	defer lease.Release(context.Background())
 
+	globalLease, err := c.acquireGlobalSlot(req, background)
+	if err != nil {
+		if background {
+			return
+		}
+		c.storeLocal(entry, errorSnapshot(err))
+		return
+	}
+	if globalLease != nil {
+		defer globalLease.Release(context.Background())
+	}
+
 	if c.workerSem != nil {
 		c.workerSem <- struct{}{}
 		defer func() { <-c.workerSem }()
@@ -334,6 +356,45 @@ func (c *Cache) waitForShared(ctx context.Context, key string) (valuestore.Entry
 	}
 }
 
+func (c *Cache) acquireGlobalSlot(req *request, background bool) (distlock.Lease, error) {
+	c.mu.Lock()
+	locks := c.locks
+	globalSlots := c.globalSlots
+	lockTTL := c.lockTTL
+	baseCtx := c.baseCtx
+	c.mu.Unlock()
+
+	if globalSlots <= 0 || locks == nil {
+		return nil, nil
+	}
+
+	ctx := req.ctx
+	if background {
+		ctx = baseCtx
+	}
+
+	start := slotOffset(req.key, globalSlots)
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		for i := 0; i < globalSlots; i++ {
+			slot := (start + i) % globalSlots
+			lease, acquired, err := locks.Acquire(ctx, globalWorkerSlotKey(slot), lockTTL)
+			if err != nil {
+				return nil, err
+			}
+			if acquired {
+				return lease, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 func (c *Cache) storeLocal(entry *localEntry, snapshot valuestore.EntrySnapshot) {
 	entry.mu.Lock()
 	entry.snapshot = cloneSnapshot(snapshot)
@@ -388,6 +449,19 @@ func normalizeLockTTL(ttl time.Duration) time.Duration {
 		return ttl
 	}
 	return time.Second
+}
+
+func globalWorkerSlotKey(slot int) string {
+	return "__cachecalc_global_worker__." + strconv.Itoa(slot)
+}
+
+func slotOffset(key string, slots int) int {
+	if slots <= 1 {
+		return 0
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	return int(h.Sum32() % uint32(slots))
 }
 
 func (c *Cache) logf(format string, args ...any) {

@@ -277,3 +277,131 @@ func TestNonPositiveMaxWorkersDisablesWorkerLimiting(t *testing.T) {
 
 	close(busyRelease)
 }
+
+// TestGlobalMaxWorkersLimitsCalculationsAcrossCaches reproduces cluster-wide
+// capacity throttling across different keys:
+//  1. Two caches share the same distributed lock provider.
+//  2. GlobalMaxWorkers is set to 1 while local MaxWorkers is disabled.
+//  3. cacheA starts a calculation for one key and holds the only global slot.
+//  4. cacheB starts a calculation for a different key.
+//
+// The second calculation must not start until the first calculation releases
+// the shared global worker slot.
+func TestGlobalMaxWorkersLimitsCalculationsAcrossCaches(t *testing.T) {
+	locks := lockmem.NewProvider()
+	cacheA := New(Config{MaxWorkers: 0, GlobalMaxWorkers: 1, Locks: locks})
+	cacheB := New(Config{MaxWorkers: 0, GlobalMaxWorkers: 1, Locks: locks})
+	defer cacheA.Close()
+	defer cacheB.Close()
+
+	firstStarted := make(chan struct{})
+	firstRelease := make(chan struct{})
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		_, _ = Get(context.Background(), cacheA, "key-a", func(ctx context.Context) (string, Policy, error) {
+			close(firstStarted)
+			<-firstRelease
+			return "a", Policy{MinTTL: 30 * time.Millisecond, MaxTTL: 300 * time.Millisecond}, nil
+		})
+	}()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("first calculation did not start")
+	}
+
+	secondStarted := make(chan struct{})
+	secondDone := make(chan struct{})
+	go func() {
+		defer close(secondDone)
+		_, _ = Get(context.Background(), cacheB, "key-b", func(ctx context.Context) (string, Policy, error) {
+			close(secondStarted)
+			return "b", Policy{MinTTL: 30 * time.Millisecond, MaxTTL: 300 * time.Millisecond}, nil
+		})
+	}()
+
+	select {
+	case <-secondStarted:
+		t.Fatal("second calculation started before the global worker slot was released")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(firstRelease)
+
+	select {
+	case <-firstDone:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("first calculation did not finish")
+	}
+
+	select {
+	case <-secondStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("second calculation did not start after the global worker slot was released")
+	}
+
+	select {
+	case <-secondDone:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("second calculation did not finish")
+	}
+}
+
+// TestNonPositiveGlobalMaxWorkersDisablesClusterLimit reproduces a cache setup
+// where cluster-wide worker limiting is disabled:
+//  1. Two caches share the same distributed lock provider.
+//  2. GlobalMaxWorkers is set to zero, which means disabled.
+//  3. cacheA starts one calculation and keeps running.
+//  4. cacheB starts a calculation for a different key.
+//
+// The second calculation should start immediately because no cluster-wide
+// worker budget is enforced when GlobalMaxWorkers is non-positive.
+func TestNonPositiveGlobalMaxWorkersDisablesClusterLimit(t *testing.T) {
+	locks := lockmem.NewProvider()
+	cacheA := New(Config{MaxWorkers: 0, GlobalMaxWorkers: 0, Locks: locks})
+	cacheB := New(Config{MaxWorkers: 0, GlobalMaxWorkers: 0, Locks: locks})
+	defer cacheA.Close()
+	defer cacheB.Close()
+
+	firstStarted := make(chan struct{})
+	firstRelease := make(chan struct{})
+	go func() {
+		_, _ = Get(context.Background(), cacheA, "key-a", func(ctx context.Context) (string, Policy, error) {
+			close(firstStarted)
+			<-firstRelease
+			return "a", Policy{MinTTL: 30 * time.Millisecond, MaxTTL: 300 * time.Millisecond}, nil
+		})
+	}()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("first calculation did not start")
+	}
+
+	secondStarted := make(chan struct{})
+	secondDone := make(chan struct{})
+	go func() {
+		defer close(secondDone)
+		_, _ = Get(context.Background(), cacheB, "key-b", func(ctx context.Context) (string, Policy, error) {
+			close(secondStarted)
+			return "b", Policy{MinTTL: 30 * time.Millisecond, MaxTTL: 300 * time.Millisecond}, nil
+		})
+	}()
+
+	select {
+	case <-secondStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("second calculation did not start immediately with GlobalMaxWorkers disabled")
+	}
+
+	close(firstRelease)
+
+	select {
+	case <-secondDone:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("second calculation did not finish")
+	}
+}

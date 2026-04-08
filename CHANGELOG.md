@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented here.
 
+## v4.1.0
+
+### Features
+
+- Added `smartcache.Config.GlobalMaxWorkers` to limit concurrent calculations
+  across caches that share the same distributed lock provider.
+- Kept the public `smartcache.Get(...)` and `smartcache.GetWithTTL(...)`
+  interfaces unchanged.
+
+### Semantics
+
+- `GlobalMaxWorkers > 0` enforces a cluster-wide calculation budget.
+- `GlobalMaxWorkers <= 0` disables the global limit.
+- The global limit is applied after per-key ownership is decided, so:
+  - distributed locking still selects who computes a given key
+  - the global worker budget limits how many winning calculations run at once
+
+### Tests
+
+- Added regression coverage for:
+  - cluster-wide throttling across different keys
+  - disabled global throttling when `GlobalMaxWorkers` is non-positive
+
 ## v4.0.0
 
 ### Breaking Changes
