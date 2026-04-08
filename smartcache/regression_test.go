@@ -34,7 +34,7 @@ func TestBackgroundRefreshRecomputesWhenSharedValueIsStale(t *testing.T) {
 		}
 	}
 
-	v1, err := Get(context.Background(), cacheA, "shared-stale-refresh", true, calc("value"))
+	v1, err := Get(context.Background(), cacheA, "shared-stale-refresh", calc("value"))
 	if err != nil {
 		t.Fatalf("initial get: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestBackgroundRefreshRecomputesWhenSharedValueIsStale(t *testing.T) {
 		t.Fatalf("initial value = %q, want value-1", v1)
 	}
 
-	vWarm, err := Get(context.Background(), cacheB, "shared-stale-refresh", true, calc("value"))
+	vWarm, err := Get(context.Background(), cacheB, "shared-stale-refresh", calc("value"))
 	if err != nil {
 		t.Fatalf("warm follower get: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestBackgroundRefreshRecomputesWhenSharedValueIsStale(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	v2, err := Get(context.Background(), cacheB, "shared-stale-refresh", true, calc("value"))
+	v2, err := Get(context.Background(), cacheB, "shared-stale-refresh", calc("value"))
 	if err != nil {
 		t.Fatalf("stale get: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestPublishRequiredKeepsPreviousLocalValueWhenSharedPublishFails(t *testing
 	})
 	defer cache.Close()
 
-	initial, err := Get(context.Background(), cache, "required-publish", false, func(ctx context.Context) (string, Policy, error) {
+	initial, err := Get(context.Background(), cache, "required-publish", func(ctx context.Context) (string, Policy, error) {
 		return "stable", Policy{
 			MinTTL:      20 * time.Millisecond,
 			MaxTTL:      100 * time.Millisecond,
@@ -149,7 +149,7 @@ func TestPublishRequiredKeepsPreviousLocalValueWhenSharedPublishFails(t *testing
 
 	time.Sleep(30 * time.Millisecond)
 
-	stale, err := Get(context.Background(), cache, "required-publish", false, func(ctx context.Context) (string, Policy, error) {
+	stale, err := Get(context.Background(), cache, "required-publish", func(ctx context.Context) (string, Policy, error) {
 		return "fresh", Policy{
 			MinTTL:      20 * time.Millisecond,
 			MaxTTL:      100 * time.Millisecond,
@@ -165,7 +165,7 @@ func TestPublishRequiredKeepsPreviousLocalValueWhenSharedPublishFails(t *testing
 
 	time.Sleep(30 * time.Millisecond)
 
-	got, err := Get(context.Background(), cache, "required-publish", false, func(ctx context.Context) (string, Policy, error) {
+	got, err := Get(context.Background(), cache, "required-publish", func(ctx context.Context) (string, Policy, error) {
 		return "fresh", Policy{
 			MinTTL:      20 * time.Millisecond,
 			MaxTTL:      100 * time.Millisecond,
@@ -222,7 +222,7 @@ func TestPublishRequiredDoesNotTreatPostPutLeaseLossAsFailedCommit(t *testing.T)
 	})
 	defer cache.Close()
 
-	initial, err := Get(context.Background(), cache, "publish-required-lease-loss", false, func(ctx context.Context) (string, Policy, error) {
+	initial, err := Get(context.Background(), cache, "publish-required-lease-loss", func(ctx context.Context) (string, Policy, error) {
 		return "stable", Policy{
 			MinTTL:      20 * time.Millisecond,
 			MaxTTL:      100 * time.Millisecond,
@@ -238,7 +238,7 @@ func TestPublishRequiredDoesNotTreatPostPutLeaseLossAsFailedCommit(t *testing.T)
 
 	time.Sleep(30 * time.Millisecond)
 
-	stale, err := Get(context.Background(), cache, "publish-required-lease-loss", false, func(ctx context.Context) (string, Policy, error) {
+	stale, err := Get(context.Background(), cache, "publish-required-lease-loss", func(ctx context.Context) (string, Policy, error) {
 		return "fresh", Policy{
 			MinTTL:      20 * time.Millisecond,
 			MaxTTL:      100 * time.Millisecond,
@@ -313,7 +313,7 @@ func TestPublishBestEffortDoesNotRollbackLocalValueFromStaleSharedState(t *testi
 	})
 	defer cache.Close()
 
-	initial, err := Get(context.Background(), cache, "best-effort-rollback", false, func(ctx context.Context) (string, Policy, error) {
+	initial, err := Get(context.Background(), cache, "best-effort-rollback", func(ctx context.Context) (string, Policy, error) {
 		return "stable", Policy{MinTTL: 20 * time.Millisecond, MaxTTL: 200 * time.Millisecond}, nil
 	})
 	if err != nil {
@@ -325,7 +325,7 @@ func TestPublishBestEffortDoesNotRollbackLocalValueFromStaleSharedState(t *testi
 
 	time.Sleep(30 * time.Millisecond)
 	values.failPut = true
-	fresh, err := Get(context.Background(), cache, "best-effort-rollback", false, func(ctx context.Context) (string, Policy, error) {
+	fresh, err := Get(context.Background(), cache, "best-effort-rollback", func(ctx context.Context) (string, Policy, error) {
 		return "fresh", Policy{MinTTL: 20 * time.Millisecond, MaxTTL: 200 * time.Millisecond}, nil
 	})
 	if err != nil {
@@ -351,7 +351,7 @@ func TestPublishBestEffortDoesNotRollbackLocalValueFromStaleSharedState(t *testi
 	time.Sleep(30 * time.Millisecond)
 	backgroundCalcStarted := make(chan struct{})
 	backgroundCalcRelease := make(chan struct{})
-	got, err := Get(context.Background(), cache, "best-effort-rollback", false, func(ctx context.Context) (string, Policy, error) {
+	got, err := Get(context.Background(), cache, "best-effort-rollback", func(ctx context.Context) (string, Policy, error) {
 		close(backgroundCalcStarted)
 		<-backgroundCalcRelease
 		return "fresh-2", Policy{MinTTL: 20 * time.Millisecond, MaxTTL: 200 * time.Millisecond}, nil
@@ -406,7 +406,7 @@ func TestPublishBestEffortDoesNotAdoptOlderSharedSnapshotWithLongerTTL(t *testin
 	})
 	defer cache.Close()
 
-	initial, err := Get(context.Background(), cache, "best-effort-mixed-ttl", false, func(ctx context.Context) (string, Policy, error) {
+	initial, err := Get(context.Background(), cache, "best-effort-mixed-ttl", func(ctx context.Context) (string, Policy, error) {
 		return "stable", Policy{MinTTL: 200 * time.Millisecond, MaxTTL: 600 * time.Millisecond}, nil
 	})
 	if err != nil {
@@ -418,7 +418,7 @@ func TestPublishBestEffortDoesNotAdoptOlderSharedSnapshotWithLongerTTL(t *testin
 
 	time.Sleep(220 * time.Millisecond)
 	values.failPut = true
-	got, err := Get(context.Background(), cache, "best-effort-mixed-ttl", false, func(ctx context.Context) (string, Policy, error) {
+	got, err := Get(context.Background(), cache, "best-effort-mixed-ttl", func(ctx context.Context) (string, Policy, error) {
 		return "fresh", Policy{MinTTL: 20 * time.Millisecond, MaxTTL: 120 * time.Millisecond}, nil
 	})
 	if err != nil {
@@ -444,7 +444,7 @@ func TestPublishBestEffortDoesNotAdoptOlderSharedSnapshotWithLongerTTL(t *testin
 	time.Sleep(40 * time.Millisecond)
 	backgroundCalcStarted := make(chan struct{})
 	backgroundCalcRelease := make(chan struct{})
-	stale, err := Get(context.Background(), cache, "best-effort-mixed-ttl", false, func(ctx context.Context) (string, Policy, error) {
+	stale, err := Get(context.Background(), cache, "best-effort-mixed-ttl", func(ctx context.Context) (string, Policy, error) {
 		close(backgroundCalcStarted)
 		<-backgroundCalcRelease
 		return "fresh-2", Policy{MinTTL: 20 * time.Millisecond, MaxTTL: 120 * time.Millisecond}, nil
@@ -521,7 +521,7 @@ func TestSharedSnapshotWithCreatedAtDoesNotOverrideNewerLegacyLocalSnapshot(t *t
 
 	backgroundCalcStarted := make(chan struct{})
 	backgroundCalcRelease := make(chan struct{})
-	got, err := Get(context.Background(), cache, "legacy-created-at", false, func(ctx context.Context) (string, Policy, error) {
+	got, err := Get(context.Background(), cache, "legacy-created-at", func(ctx context.Context) (string, Policy, error) {
 		close(backgroundCalcStarted)
 		<-backgroundCalcRelease
 		return "fresh-2", Policy{MinTTL: 20 * time.Millisecond, MaxTTL: 200 * time.Millisecond}, nil

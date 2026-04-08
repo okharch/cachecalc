@@ -32,12 +32,12 @@ func RunSmartcacheContract(t *testing.T, newCaches CacheFactory) {
 		results := make(chan string, 2)
 		errs := make(chan error, 2)
 		go func() {
-			v, err := smartcache.Get(context.Background(), cacheA, key, true, calc("a"))
+				v, err := smartcache.Get(context.Background(), cacheA, key, calc("a"))
 			results <- v
 			errs <- err
 		}()
 		go func() {
-			v, err := smartcache.Get(context.Background(), cacheB, key, true, calc("b"))
+				v, err := smartcache.Get(context.Background(), cacheB, key, calc("b"))
 			results <- v
 			errs <- err
 		}()
@@ -71,20 +71,20 @@ func RunSmartcacheContract(t *testing.T, newCaches CacheFactory) {
 			return "value-" + string(rune('0'+n)), smartcache.Policy{MinTTL: 30 * time.Millisecond, MaxTTL: 120 * time.Millisecond}, nil
 		}
 
-		v1, err := smartcache.Get(context.Background(), cacheA, key, true, calc)
+		v1, err := smartcache.Get(context.Background(), cacheA, key, calc)
 		if err != nil || v1 != "value-1" {
 			t.Fatalf("first value = %q err=%v", v1, err)
 		}
 
 		time.Sleep(40 * time.Millisecond)
-		v2, err := smartcache.Get(context.Background(), cacheA, key, true, calc)
+		v2, err := smartcache.Get(context.Background(), cacheA, key, calc)
 		if err != nil || v2 != "value-1" {
 			t.Fatalf("stale read = %q err=%v", v2, err)
 		}
 
 		deadline := time.Now().Add(300 * time.Millisecond)
 		for time.Now().Before(deadline) {
-			v3, err := smartcache.Get(context.Background(), cacheA, key, true, calc)
+			v3, err := smartcache.Get(context.Background(), cacheA, key, calc)
 			if err == nil && v3 == "value-2" {
 				return
 			}

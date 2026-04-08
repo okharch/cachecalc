@@ -14,7 +14,7 @@ func TestForegroundCalculationDoesNotLeakGoroutines(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 
 	for i := 0; i < 200; i++ {
-		_, err := GetWithTTL(context.Background(), cache, uniqueLeakKey(i), 20*time.Millisecond, 40*time.Millisecond, false, func(ctx context.Context) (string, error) {
+		_, err := GetWithTTL(context.Background(), cache, uniqueLeakKey(i), 20*time.Millisecond, 40*time.Millisecond, func(ctx context.Context) (string, error) {
 			return "ok", nil
 		})
 		if err != nil {

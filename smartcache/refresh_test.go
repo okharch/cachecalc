@@ -32,7 +32,7 @@ func TestBackgroundRefreshAcrossCachesBacksOffWhenAnotherCacheOwnsRefresh(t *tes
 
 	const key = "refresh-backoff"
 
-	initial, err := Get(context.Background(), cacheA, key, true, func(ctx context.Context) (string, Policy, error) {
+	initial, err := Get(context.Background(), cacheA, key, func(ctx context.Context) (string, Policy, error) {
 		return "value-1", Policy{
 			MinTTL: 30 * time.Millisecond,
 			MaxTTL: 300 * time.Millisecond,
@@ -45,7 +45,7 @@ func TestBackgroundRefreshAcrossCachesBacksOffWhenAnotherCacheOwnsRefresh(t *tes
 		t.Fatalf("seed cacheA = %q, want value-1", initial)
 	}
 
-	warm, err := Get(context.Background(), cacheB, key, true, func(ctx context.Context) (string, Policy, error) {
+	warm, err := Get(context.Background(), cacheB, key, func(ctx context.Context) (string, Policy, error) {
 		t.Fatal("cacheB should warm from shared value, not calculate")
 		return "", Policy{}, nil
 	})
@@ -60,7 +60,7 @@ func TestBackgroundRefreshAcrossCachesBacksOffWhenAnotherCacheOwnsRefresh(t *tes
 
 	refreshStarted := make(chan struct{})
 	refreshRelease := make(chan struct{})
-	stale, err := Get(context.Background(), cacheA, key, true, func(ctx context.Context) (string, Policy, error) {
+	stale, err := Get(context.Background(), cacheA, key, func(ctx context.Context) (string, Policy, error) {
 		close(refreshStarted)
 		<-refreshRelease
 		return "value-2", Policy{
@@ -82,7 +82,7 @@ func TestBackgroundRefreshAcrossCachesBacksOffWhenAnotherCacheOwnsRefresh(t *tes
 	}
 
 	var cacheBCalcCalls atomic.Int32
-	stale, err = Get(context.Background(), cacheB, key, true, func(ctx context.Context) (string, Policy, error) {
+	stale, err = Get(context.Background(), cacheB, key, func(ctx context.Context) (string, Policy, error) {
 		cacheBCalcCalls.Add(1)
 		return "value-b", Policy{
 			MinTTL: 30 * time.Millisecond,
@@ -136,7 +136,7 @@ func TestBackgroundRefreshWaitsForWorkerSlotWhenLimited(t *testing.T) {
 	cache := New(Config{MaxWorkers: 1})
 	defer cache.Close()
 
-	seed, err := Get(context.Background(), cache, "stale-key", true, func(ctx context.Context) (string, Policy, error) {
+	seed, err := Get(context.Background(), cache, "stale-key", func(ctx context.Context) (string, Policy, error) {
 		return "stale-1", Policy{
 			MinTTL: 30 * time.Millisecond,
 			MaxTTL: 300 * time.Millisecond,
@@ -156,7 +156,7 @@ func TestBackgroundRefreshWaitsForWorkerSlotWhenLimited(t *testing.T) {
 	busyDone := make(chan struct{})
 	go func() {
 		defer close(busyDone)
-		_, _ = Get(context.Background(), cache, "busy-key", true, func(ctx context.Context) (string, Policy, error) {
+		_, _ = Get(context.Background(), cache, "busy-key", func(ctx context.Context) (string, Policy, error) {
 			close(busyStarted)
 			<-busyRelease
 			return "busy", Policy{
@@ -173,7 +173,7 @@ func TestBackgroundRefreshWaitsForWorkerSlotWhenLimited(t *testing.T) {
 	}
 
 	backgroundStarted := make(chan struct{})
-	stale, err := Get(context.Background(), cache, "stale-key", true, func(ctx context.Context) (string, Policy, error) {
+	stale, err := Get(context.Background(), cache, "stale-key", func(ctx context.Context) (string, Policy, error) {
 		close(backgroundStarted)
 		return "stale-2", Policy{
 			MinTTL: 30 * time.Millisecond,
@@ -206,4 +206,74 @@ func TestBackgroundRefreshWaitsForWorkerSlotWhenLimited(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("background refresh did not start after the worker slot was released")
 	}
+}
+
+// TestNonPositiveMaxWorkersDisablesWorkerLimiting reproduces a refresh path
+// with no worker cap:
+//  1. MaxWorkers is set to zero, which now means unlimited workers.
+//  2. A foreground calculation is already running.
+//  3. A stale key triggers background refresh.
+//
+// The background refresh calculation should start immediately instead of
+// waiting for the unrelated foreground calculation to release a worker slot.
+func TestNonPositiveMaxWorkersDisablesWorkerLimiting(t *testing.T) {
+	cache := New(Config{MaxWorkers: 0})
+	defer cache.Close()
+
+	seed, err := Get(context.Background(), cache, "stale-key", func(ctx context.Context) (string, Policy, error) {
+		return "stale-1", Policy{
+			MinTTL: 30 * time.Millisecond,
+			MaxTTL: 300 * time.Millisecond,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("seed stale-key: %v", err)
+	}
+	if seed != "stale-1" {
+		t.Fatalf("seed stale-key = %q, want stale-1", seed)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	busyStarted := make(chan struct{})
+	busyRelease := make(chan struct{})
+	go func() {
+		_, _ = Get(context.Background(), cache, "busy-key", func(ctx context.Context) (string, Policy, error) {
+			close(busyStarted)
+			<-busyRelease
+			return "busy", Policy{
+				MinTTL: 30 * time.Millisecond,
+				MaxTTL: 300 * time.Millisecond,
+			}, nil
+		})
+	}()
+
+	select {
+	case <-busyStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("busy calculation did not start")
+	}
+
+	backgroundStarted := make(chan struct{})
+	stale, err := Get(context.Background(), cache, "stale-key", func(ctx context.Context) (string, Policy, error) {
+		close(backgroundStarted)
+		return "stale-2", Policy{
+			MinTTL: 30 * time.Millisecond,
+			MaxTTL: 300 * time.Millisecond,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("trigger background refresh: %v", err)
+	}
+	if stale != "stale-1" {
+		t.Fatalf("stale read = %q, want stale-1", stale)
+	}
+
+	select {
+	case <-backgroundStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("background refresh did not start immediately with MaxWorkers disabled")
+	}
+
+	close(busyRelease)
 }

@@ -26,7 +26,7 @@ func main() {
 	defer service.Close()
 	defer cache.Close()
 
-	value, err := smartcache.GetWithTTL(ctx, cache, "current-time", 2*time.Second, 10*time.Second, true, func(ctx context.Context) (string, error) {
+	value, err := smartcache.GetWithTTL(ctx, cache, "current-time", 2*time.Second, 10*time.Second, func(ctx context.Context) (string, error) {
 		time.Sleep(500 * time.Millisecond)
 		return fmt.Sprintf("leader=%v calculated_at=%s", service.IsLeader(), time.Now().Format(time.RFC3339Nano)), nil
 	})

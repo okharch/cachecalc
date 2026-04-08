@@ -50,7 +50,7 @@ func TestBindDoesNotPoisonCacheWhenReadinessFails(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	value, calcErr := smartcache.GetWithTTL(ctx, cache, "bind-failure-local-fallback", 20*time.Millisecond, 50*time.Millisecond, false, func(ctx context.Context) (string, error) {
+	value, calcErr := smartcache.GetWithTTL(ctx, cache, "bind-failure-local-fallback", 20*time.Millisecond, 50*time.Millisecond, func(ctx context.Context) (string, error) {
 		return "local", nil
 	})
 	if calcErr != nil {

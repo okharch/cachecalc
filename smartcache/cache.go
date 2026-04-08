@@ -32,7 +32,6 @@ type CalculateValueWithPolicy[T any] func(context.Context) (T, Policy, error)
 type request struct {
 	ctx          context.Context
 	key          string
-	limitWorkers bool
 	ready        chan error
 	dest         any
 	calc         func(context.Context) (any, Policy, error)
@@ -45,6 +44,8 @@ type localEntry struct {
 }
 
 type Config struct {
+	// MaxWorkers limits concurrent calculations when positive. Zero or negative
+	// disables worker limiting entirely.
 	MaxWorkers int
 	LockTTL    time.Duration
 	Locks      distlock.Provider
@@ -69,10 +70,6 @@ type Cache struct {
 }
 
 func New(cfg Config) *Cache {
-	maxWorkers := cfg.MaxWorkers
-	if maxWorkers <= 0 {
-		maxWorkers = 4
-	}
 	baseCtx, cancel := context.WithCancel(context.Background())
 	c := &Cache{
 		entries:   make(map[string]*localEntry, 1024),
@@ -80,9 +77,11 @@ func New(cfg Config) *Cache {
 		values:    cfg.Values,
 		baseCtx:   baseCtx,
 		cancel:    cancel,
-		workerSem: make(chan struct{}, maxWorkers),
 		logger:    cfg.Logger,
 		lockTTL:   normalizeLockTTL(cfg.LockTTL),
+	}
+	if cfg.MaxWorkers > 0 {
+		c.workerSem = make(chan struct{}, cfg.MaxWorkers)
 	}
 	c.localValues = &localValueStore{cache: c}
 	return c
@@ -110,13 +109,12 @@ func (c *Cache) LocalValues() valuestore.Store {
 	return c.localValues
 }
 
-func Get[T any](ctx context.Context, cache *Cache, key string, limitWorkers bool, calc CalculateValueWithPolicy[T]) (result T, err error) {
+func Get[T any](ctx context.Context, cache *Cache, key string, calc CalculateValueWithPolicy[T]) (result T, err error) {
 	req := &request{
-		ctx:          ctx,
-		key:          key,
-		limitWorkers: limitWorkers,
-		ready:        make(chan error, 1),
-		dest:         &result,
+		ctx:   ctx,
+		key:   key,
+		ready: make(chan error, 1),
+		dest:  &result,
 		calc: func(ctx context.Context) (any, Policy, error) {
 			return calc(ctx)
 		},
@@ -126,13 +124,13 @@ func Get[T any](ctx context.Context, cache *Cache, key string, limitWorkers bool
 	return
 }
 
-func GetWithTTL[T any](ctx context.Context, cache *Cache, key string, minTTL, maxTTL time.Duration, limitWorkers bool, calc CalculateValue[T]) (result T, err error) {
+func GetWithTTL[T any](ctx context.Context, cache *Cache, key string, minTTL, maxTTL time.Duration, calc CalculateValue[T]) (result T, err error) {
 	wrapped := func(ctx context.Context) (T, Policy, error) {
 		started := time.Now()
 		value, err := calc(ctx)
 		return value, Policy{MinTTL: minTTL, MaxTTL: maxTTL, CalcTime: time.Since(started)}, err
 	}
-	return Get(ctx, cache, key, limitWorkers, wrapped)
+	return Get(ctx, cache, key, wrapped)
 }
 
 func (c *Cache) serve(req *request) {
@@ -241,7 +239,7 @@ func (c *Cache) refresh(key string, entry *localEntry, wait chan struct{}, req *
 	}
 	defer lease.Release(context.Background())
 
-	if req.limitWorkers {
+	if c.workerSem != nil {
 		c.workerSem <- struct{}{}
 		defer func() { <-c.workerSem }()
 	}

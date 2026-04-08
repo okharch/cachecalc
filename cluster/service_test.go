@@ -42,7 +42,7 @@ func TestPromotedLeaderServesWarmLocalValue(t *testing.T) {
 	waitForLeader(t, serviceA, serviceB)
 
 	var aCalls atomic.Int32
-	valueA, err := smartcache.Get(context.Background(), cacheA, "item", true, func(ctx context.Context) (string, smartcache.Policy, error) {
+	valueA, err := smartcache.Get(context.Background(), cacheA, "item", func(ctx context.Context) (string, smartcache.Policy, error) {
 		aCalls.Add(1)
 		return "alpha", smartcache.Policy{MinTTL: time.Second, MaxTTL: 3 * time.Second}, nil
 	})
@@ -50,7 +50,7 @@ func TestPromotedLeaderServesWarmLocalValue(t *testing.T) {
 		t.Fatalf("cacheA initial get = %q, err=%v", valueA, err)
 	}
 
-	valueB, err := smartcache.Get(context.Background(), cacheB, "item", true, func(ctx context.Context) (string, smartcache.Policy, error) {
+	valueB, err := smartcache.Get(context.Background(), cacheB, "item", func(ctx context.Context) (string, smartcache.Policy, error) {
 		return "beta", smartcache.Policy{MinTTL: time.Second, MaxTTL: 3 * time.Second}, nil
 	})
 	if err != nil || valueB != "alpha" {
@@ -80,7 +80,7 @@ func TestPromotedLeaderServesWarmLocalValue(t *testing.T) {
 	defer cacheC.Close()
 
 	var cCalls atomic.Int32
-	got, err := smartcache.Get(context.Background(), cacheC, "item", true, func(ctx context.Context) (string, smartcache.Policy, error) {
+	got, err := smartcache.Get(context.Background(), cacheC, "item", func(ctx context.Context) (string, smartcache.Policy, error) {
 		cCalls.Add(1)
 		return "gamma", smartcache.Policy{MinTTL: time.Second, MaxTTL: 3 * time.Second}, nil
 	})
