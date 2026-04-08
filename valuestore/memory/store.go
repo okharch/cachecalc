@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/okharch/cachecalc/valuestore"
+	"github.com/okharch/cachecalc/v4/valuestore"
 )
 
 // Store is an in-memory ValueStore implementation useful for tests and

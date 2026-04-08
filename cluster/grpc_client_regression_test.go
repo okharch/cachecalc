@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/okharch/cachecalc/valuestore"
+	"github.com/okharch/cachecalc/v4/valuestore"
 )
 
 // TestRemoteValueStoreReadThroughCacheClonesSnapshots documents the immutability

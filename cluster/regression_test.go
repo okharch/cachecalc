@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	clustercfg "github.com/okharch/cachecalc/cluster"
-	lockmem "github.com/okharch/cachecalc/distlock/memory"
-	providerscluster "github.com/okharch/cachecalc/providers/cluster"
-	vmemory "github.com/okharch/cachecalc/valuestore/memory"
+	clustercfg "github.com/okharch/cachecalc/v4/cluster"
+	lockmem "github.com/okharch/cachecalc/v4/distlock/memory"
+	providerscluster "github.com/okharch/cachecalc/v4/providers/cluster"
+	vmemory "github.com/okharch/cachecalc/v4/valuestore/memory"
 )
 
 // TestClusterNewDoesNotFailFollowerStartupWithoutReachableLeader documents the

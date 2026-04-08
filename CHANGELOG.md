@@ -2,6 +2,35 @@
 
 All notable changes to this project are documented here.
 
+## v4.0.0
+
+### Breaking Changes
+
+- Changed the Go module path to `github.com/okharch/cachecalc/v4`.
+- Removed the `limitWorkers` parameter from `smartcache.Get(...)` and
+  `smartcache.GetWithTTL(...)`.
+- Moved worker limiting to `smartcache.Config.MaxWorkers` only:
+  - `MaxWorkers > 0` limits concurrent calculations
+  - `MaxWorkers <= 0` disables worker limiting
+
+### Why
+
+- Worker-pool behavior is now a cache-level policy instead of a per-call
+  choice.
+- Call sites no longer need to thread the same boolean through every request.
+- Refresh and foreground calculations now share one consistent concurrency
+  model.
+
+### Migration Notes
+
+- Update imports from `github.com/okharch/cachecalc/...` to
+  `github.com/okharch/cachecalc/v4/...`.
+- Remove the extra boolean argument from `smartcache.Get(...)` and
+  `smartcache.GetWithTTL(...)`.
+- Configure worker limiting through `smartcache.Config.MaxWorkers`:
+  - set a positive number to cap concurrent calculations
+  - set zero or a negative value for unlimited concurrency
+
 ## v3.0.0
 
 ### Architecture

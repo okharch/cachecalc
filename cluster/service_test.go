@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	clustercfg "github.com/okharch/cachecalc/cluster"
-	pcluster "github.com/okharch/cachecalc/providers/cluster"
-	"github.com/okharch/cachecalc/smartcache"
+	clustercfg "github.com/okharch/cachecalc/v4/cluster"
+	pcluster "github.com/okharch/cachecalc/v4/providers/cluster"
+	"github.com/okharch/cachecalc/v4/smartcache"
 )
 
 func TestPromotedLeaderServesWarmLocalValue(t *testing.T) {

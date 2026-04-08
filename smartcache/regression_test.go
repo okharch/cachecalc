@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/okharch/cachecalc/distlock"
-	lockmem "github.com/okharch/cachecalc/distlock/memory"
-	"github.com/okharch/cachecalc/valuestore"
-	vmemory "github.com/okharch/cachecalc/valuestore/memory"
+	"github.com/okharch/cachecalc/v4/distlock"
+	lockmem "github.com/okharch/cachecalc/v4/distlock/memory"
+	"github.com/okharch/cachecalc/v4/valuestore"
+	vmemory "github.com/okharch/cachecalc/v4/valuestore/memory"
 )
 
 func TestBackgroundRefreshRecomputesWhenSharedValueIsStale(t *testing.T) {

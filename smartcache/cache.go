@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/okharch/cachecalc/distlock"
-	"github.com/okharch/cachecalc/valuestore"
+	"github.com/okharch/cachecalc/v4/distlock"
+	"github.com/okharch/cachecalc/v4/valuestore"
 )
 
 type PublishMode int
@@ -30,11 +30,11 @@ type CalculateValue[T any] func(context.Context) (T, error)
 type CalculateValueWithPolicy[T any] func(context.Context) (T, Policy, error)
 
 type request struct {
-	ctx          context.Context
-	key          string
-	ready        chan error
-	dest         any
-	calc         func(context.Context) (any, Policy, error)
+	ctx   context.Context
+	key   string
+	ready chan error
+	dest  any
+	calc  func(context.Context) (any, Policy, error)
 }
 
 type localEntry struct {
@@ -72,13 +72,13 @@ type Cache struct {
 func New(cfg Config) *Cache {
 	baseCtx, cancel := context.WithCancel(context.Background())
 	c := &Cache{
-		entries:   make(map[string]*localEntry, 1024),
-		locks:     cfg.Locks,
-		values:    cfg.Values,
-		baseCtx:   baseCtx,
-		cancel:    cancel,
-		logger:    cfg.Logger,
-		lockTTL:   normalizeLockTTL(cfg.LockTTL),
+		entries: make(map[string]*localEntry, 1024),
+		locks:   cfg.Locks,
+		values:  cfg.Values,
+		baseCtx: baseCtx,
+		cancel:  cancel,
+		logger:  cfg.Logger,
+		lockTTL: normalizeLockTTL(cfg.LockTTL),
 	}
 	if cfg.MaxWorkers > 0 {
 		c.workerSem = make(chan struct{}, cfg.MaxWorkers)

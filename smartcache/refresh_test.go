@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	lockmem "github.com/okharch/cachecalc/distlock/memory"
-	vmemory "github.com/okharch/cachecalc/valuestore/memory"
+	lockmem "github.com/okharch/cachecalc/v4/distlock/memory"
+	vmemory "github.com/okharch/cachecalc/v4/valuestore/memory"
 )
 
 // TestBackgroundRefreshAcrossCachesBacksOffWhenAnotherCacheOwnsRefresh

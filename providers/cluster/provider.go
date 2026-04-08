@@ -4,11 +4,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/okharch/cachecalc/cluster"
-	"github.com/okharch/cachecalc/distlock/memory"
-	"github.com/okharch/cachecalc/smartcache"
-	"github.com/okharch/cachecalc/valuestore"
-	vmemory "github.com/okharch/cachecalc/valuestore/memory"
+	"github.com/okharch/cachecalc/v4/cluster"
+	"github.com/okharch/cachecalc/v4/distlock/memory"
+	"github.com/okharch/cachecalc/v4/smartcache"
+	"github.com/okharch/cachecalc/v4/valuestore"
+	vmemory "github.com/okharch/cachecalc/v4/valuestore/memory"
 )
 
 // Bind wires a smartcache instance to a cluster service. The cache's local

@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/okharch/cachecalc/cluster/cachepb"
-	"github.com/okharch/cachecalc/distlock"
-	"github.com/okharch/cachecalc/valuestore"
+	"github.com/okharch/cachecalc/v4/cluster/cachepb"
+	"github.com/okharch/cachecalc/v4/distlock"
+	"github.com/okharch/cachecalc/v4/valuestore"
 	"google.golang.org/grpc"
 )
 

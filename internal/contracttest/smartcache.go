@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/okharch/cachecalc/smartcache"
+	"github.com/okharch/cachecalc/v4/smartcache"
 )
 
 type CacheFactory func(t *testing.T) (a, b *smartcache.Cache, cleanup func())
@@ -32,12 +32,12 @@ func RunSmartcacheContract(t *testing.T, newCaches CacheFactory) {
 		results := make(chan string, 2)
 		errs := make(chan error, 2)
 		go func() {
-				v, err := smartcache.Get(context.Background(), cacheA, key, calc("a"))
+			v, err := smartcache.Get(context.Background(), cacheA, key, calc("a"))
 			results <- v
 			errs <- err
 		}()
 		go func() {
-				v, err := smartcache.Get(context.Background(), cacheB, key, calc("b"))
+			v, err := smartcache.Get(context.Background(), cacheB, key, calc("b"))
 			results <- v
 			errs <- err
 		}()

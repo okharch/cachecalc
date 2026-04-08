@@ -4,11 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/okharch/cachecalc/distlock"
-	"github.com/okharch/cachecalc/internal/contracttest"
-	"github.com/okharch/cachecalc/providers/postgres"
-	"github.com/okharch/cachecalc/smartcache"
-	"github.com/okharch/cachecalc/valuestore"
+	"github.com/okharch/cachecalc/v4/distlock"
+	"github.com/okharch/cachecalc/v4/internal/contracttest"
+	"github.com/okharch/cachecalc/v4/providers/postgres"
+	"github.com/okharch/cachecalc/v4/smartcache"
+	"github.com/okharch/cachecalc/v4/valuestore"
 )
 
 func TestPostgresValueStoreContract(t *testing.T) {

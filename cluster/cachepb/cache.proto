@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package cachepb;
 
-option go_package = "github.com/okharch/cachecalc/cluster/cachepb";
+option go_package = "github.com/okharch/cachecalc/v4/cluster/cachepb";
 
 service ClusterService {
   rpc GetValue(GetValueRequest) returns (GetValueResponse);

@@ -1,4 +1,4 @@
-module github.com/okharch/cachecalc
+module github.com/okharch/cachecalc/v4
 
 go 1.20
 

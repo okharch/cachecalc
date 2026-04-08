@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/okharch/cachecalc/valuestore"
+	"github.com/okharch/cachecalc/v4/valuestore"
 )
 
 type ValueStoreFactory func(t *testing.T) (valuestore.Store, func())

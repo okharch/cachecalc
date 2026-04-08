@@ -7,8 +7,8 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/okharch/cachecalc/distlock"
-	"github.com/okharch/cachecalc/valuestore"
+	"github.com/okharch/cachecalc/v4/distlock"
+	"github.com/okharch/cachecalc/v4/valuestore"
 )
 
 // Backend provides shared value storage and distributed locks on SQLite.

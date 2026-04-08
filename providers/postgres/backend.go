@@ -9,8 +9,8 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
-	"github.com/okharch/cachecalc/distlock"
-	"github.com/okharch/cachecalc/valuestore"
+	"github.com/okharch/cachecalc/v4/distlock"
+	"github.com/okharch/cachecalc/v4/valuestore"
 )
 
 const (

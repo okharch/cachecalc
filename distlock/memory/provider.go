@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/okharch/cachecalc/distlock"
+	"github.com/okharch/cachecalc/v4/distlock"
 )
 
 type record struct {

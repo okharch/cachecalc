@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	clustercfg "github.com/okharch/cachecalc/cluster"
-	providerscluster "github.com/okharch/cachecalc/providers/cluster"
-	"github.com/okharch/cachecalc/smartcache"
+	clustercfg "github.com/okharch/cachecalc/v4/cluster"
+	providerscluster "github.com/okharch/cachecalc/v4/providers/cluster"
+	"github.com/okharch/cachecalc/v4/smartcache"
 )
 
 func main() {

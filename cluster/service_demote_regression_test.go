@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	lockmem "github.com/okharch/cachecalc/distlock/memory"
-	"github.com/okharch/cachecalc/valuestore"
-	vmemory "github.com/okharch/cachecalc/valuestore/memory"
+	lockmem "github.com/okharch/cachecalc/v4/distlock/memory"
+	"github.com/okharch/cachecalc/v4/valuestore"
+	vmemory "github.com/okharch/cachecalc/v4/valuestore/memory"
 )
 
 // TestServiceDemoteWaitsForInFlightLeaderPut documents the fencing behavior for

@@ -3,9 +3,9 @@ package memory_test
 import (
 	"testing"
 
-	"github.com/okharch/cachecalc/distlock"
-	"github.com/okharch/cachecalc/distlock/memory"
-	"github.com/okharch/cachecalc/internal/contracttest"
+	"github.com/okharch/cachecalc/v4/distlock"
+	"github.com/okharch/cachecalc/v4/distlock/memory"
+	"github.com/okharch/cachecalc/v4/internal/contracttest"
 )
 
 func TestMemoryLockBackendContract(t *testing.T) {

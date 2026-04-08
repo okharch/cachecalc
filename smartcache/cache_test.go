@@ -3,10 +3,10 @@ package smartcache_test
 import (
 	"testing"
 
-	lockmem "github.com/okharch/cachecalc/distlock/memory"
-	"github.com/okharch/cachecalc/internal/contracttest"
-	"github.com/okharch/cachecalc/smartcache"
-	vmemory "github.com/okharch/cachecalc/valuestore/memory"
+	lockmem "github.com/okharch/cachecalc/v4/distlock/memory"
+	"github.com/okharch/cachecalc/v4/internal/contracttest"
+	"github.com/okharch/cachecalc/v4/smartcache"
+	vmemory "github.com/okharch/cachecalc/v4/valuestore/memory"
 )
 
 func TestMemorySmartcacheContract(t *testing.T) {

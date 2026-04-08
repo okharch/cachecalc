@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/okharch/cachecalc/cluster/cachepb"
-	"github.com/okharch/cachecalc/valuestore"
+	"github.com/okharch/cachecalc/v4/cluster/cachepb"
+	"github.com/okharch/cachecalc/v4/valuestore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"

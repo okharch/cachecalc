@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/okharch/cachecalc/distlock"
-	"github.com/okharch/cachecalc/valuestore"
-	vmemory "github.com/okharch/cachecalc/valuestore/memory"
+	"github.com/okharch/cachecalc/v4/distlock"
+	"github.com/okharch/cachecalc/v4/valuestore"
+	vmemory "github.com/okharch/cachecalc/v4/valuestore/memory"
 )
 
 // Service exposes a leader-backed ValueStore and distlock.Backend over gRPC.

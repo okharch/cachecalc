@@ -4,11 +4,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/okharch/cachecalc/distlock"
-	"github.com/okharch/cachecalc/internal/contracttest"
-	"github.com/okharch/cachecalc/providers/sqlite"
-	"github.com/okharch/cachecalc/smartcache"
-	"github.com/okharch/cachecalc/valuestore"
+	"github.com/okharch/cachecalc/v4/distlock"
+	"github.com/okharch/cachecalc/v4/internal/contracttest"
+	"github.com/okharch/cachecalc/v4/providers/sqlite"
+	"github.com/okharch/cachecalc/v4/smartcache"
+	"github.com/okharch/cachecalc/v4/valuestore"
 )
 
 func TestSQLiteValueStoreContract(t *testing.T) {
