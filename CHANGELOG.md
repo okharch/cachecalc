@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here.
 
+## v4.2.0
+
+### Features
+
+- Added MongoDB backend (`providers/mongo`) implementing both
+  `valuestore.Store` and `distlock.Backend`.
+- The backend uses MongoDB TTL indexes for automatic expiry cleanup of
+  both cached values and distributed locks.
+
+### Tests
+
+- Added contract test coverage for MongoDB:
+  - `valuestore.Store`
+  - `distlock.Backend`
+  - composed `smartcache` (cross-instance deduplication, stale refresh)
+
 ## v4.1.0
 
 ### Features
