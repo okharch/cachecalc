@@ -47,4 +47,5 @@ Three core interfaces that backends implement:
 - `MinTTL` is auto-adjusted to at least `2 × CalcTime` to prevent refresh storms.
 - `Config.MaxWorkers` limits local concurrency; `Config.GlobalMaxWorkers` limits cluster-wide concurrent calculations via distributed lock slots.
 - `PublishMode` controls whether shared-store publication is best-effort or required for the calculation to succeed.
+- Background refresh errors preserve the stale value instead of replacing it with an error snapshot. The `Config.OnRefreshError` callback provides observability for these failures.
 - `Cache.SetShared()` allows hot-swapping lock/value providers (used during leader promotion/demotion).

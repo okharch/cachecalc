@@ -50,6 +50,8 @@ Between `MinTTL` and `MaxTTL`, the value is still usable, but it is no longer fr
 - stale values do not trigger a stampede
 - expired values still get strict recomputation semantics
 
+If a background refresh calculation fails, the stale value is preserved — readers continue getting the cached result while the cache retries on subsequent requests. The error is logged and reported via the optional `Config.OnRefreshError` callback. Only when `MaxTTL` expires does a foreground calculation run, and only then does the caller see the error directly.
+
 This is the main reason the library is more than a cache wrapper. It coordinates when to reuse, when to refresh, and when to block.
 
 ### Controlled publication semantics
