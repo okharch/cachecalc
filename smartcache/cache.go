@@ -57,6 +57,7 @@ type Config struct {
 	Locks            distlock.Provider
 	Values           valuestore.Store
 	Logger           *log.Logger
+	OnRefreshError   func(key string, err error)
 }
 
 // Cache coordinates local singleflight, TTL decisions, and optional shared
@@ -72,8 +73,9 @@ type Cache struct {
 	globalSlots int
 	workers     sync.WaitGroup
 	logger      *log.Logger
-	localValues valuestore.Store
-	lockTTL     time.Duration
+	localValues    valuestore.Store
+	lockTTL        time.Duration
+	onRefreshError func(key string, err error)
 }
 
 func New(cfg Config) *Cache {
@@ -84,8 +86,9 @@ func New(cfg Config) *Cache {
 		values:  cfg.Values,
 		baseCtx: baseCtx,
 		cancel:  cancel,
-		logger:  cfg.Logger,
-		lockTTL: normalizeLockTTL(cfg.LockTTL),
+		logger:         cfg.Logger,
+		lockTTL:        normalizeLockTTL(cfg.LockTTL),
+		onRefreshError: cfg.OnRefreshError,
 	}
 	if cfg.MaxWorkers > 0 {
 		c.workerSem = make(chan struct{}, cfg.MaxWorkers)
@@ -273,13 +276,22 @@ func (c *Cache) refresh(key string, entry *localEntry, wait chan struct{}, req *
 	if policy.CalcTime <= 0 {
 		policy.CalcTime = calcDuration
 	}
+	previous := c.localSnapshot(entry)
 	snapshot, snapErr := snapshotFromResult(value, err, policy, calcDuration)
 	if snapErr != nil {
 		c.storeLocal(entry, errorSnapshot(snapErr))
 		return
 	}
 
-	previous := c.localSnapshot(entry)
+	if snapshot.Error != "" && background && previous.Usable(time.Now()) {
+		c.logf("background refresh for %q failed: %s; serving stale value", key, snapshot.Error)
+		if c.onRefreshError != nil {
+			c.onRefreshError(key, errors.New(snapshot.Error))
+		}
+		c.storeLocal(entry, previous)
+		return
+	}
+
 	if policy.PublishMode == PublishRequired {
 		if err := c.publishRequired(req.ctx, key, snapshot, lease); err != nil {
 			if background && previous.Usable(time.Now()) {

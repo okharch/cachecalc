@@ -2,6 +2,7 @@ package smartcache
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -346,6 +347,83 @@ func TestGlobalMaxWorkersLimitsCalculationsAcrossCaches(t *testing.T) {
 	case <-secondDone:
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("second calculation did not finish")
+	}
+}
+
+// TestBackgroundRefreshErrorPreservesStaleValue verifies that when a background
+// refresh calculation returns an error, the cache keeps serving the previous
+// stale-but-usable value instead of replacing it with an error snapshot.
+// It also verifies that OnRefreshError is called with the key and error.
+func TestBackgroundRefreshErrorPreservesStaleValue(t *testing.T) {
+	var refreshErr atomic.Value
+	var refreshKey atomic.Value
+	cache := New(Config{
+		MaxWorkers: 2,
+		OnRefreshError: func(key string, err error) {
+			refreshKey.Store(key)
+			refreshErr.Store(err.Error())
+		},
+	})
+	defer cache.Close()
+
+	const key = "stale-key"
+
+	seed, err := Get(context.Background(), cache, key, func(ctx context.Context) (string, Policy, error) {
+		return "good-value", Policy{
+			MinTTL: 30 * time.Millisecond,
+			MaxTTL: 500 * time.Millisecond,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if seed != "good-value" {
+		t.Fatalf("seed = %q, want good-value", seed)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	calcStarted := make(chan struct{})
+	stale, err := Get(context.Background(), cache, key, func(ctx context.Context) (string, Policy, error) {
+		close(calcStarted)
+		return "", Policy{
+			MinTTL: 30 * time.Millisecond,
+			MaxTTL: 500 * time.Millisecond,
+		}, errors.New("fetch failed")
+	})
+	if err != nil {
+		t.Fatalf("stale read should succeed: %v", err)
+	}
+	if stale != "good-value" {
+		t.Fatalf("stale read = %q, want good-value", stale)
+	}
+
+	select {
+	case <-calcStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("background refresh did not start")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	next, err := Get(context.Background(), cache, key, func(ctx context.Context) (string, Policy, error) {
+		return "recovered", Policy{
+			MinTTL: 30 * time.Millisecond,
+			MaxTTL: 500 * time.Millisecond,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("post-error read should succeed: %v", err)
+	}
+	if next != "good-value" && next != "recovered" {
+		t.Fatalf("post-error read = %q, want good-value or recovered", next)
+	}
+
+	if v, ok := refreshKey.Load().(string); !ok || v != key {
+		t.Fatalf("OnRefreshError key = %v, want %q", refreshKey.Load(), key)
+	}
+	if v, ok := refreshErr.Load().(string); !ok || v != "fetch failed" {
+		t.Fatalf("OnRefreshError err = %v, want 'fetch failed'", refreshErr.Load())
 	}
 }
 

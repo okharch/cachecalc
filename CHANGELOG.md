@@ -2,6 +2,31 @@
 
 All notable changes to this project are documented here.
 
+## v4.3.0
+
+### Behavior Change
+
+- Background refresh errors no longer replace the cached value with an error
+  snapshot. Previously, when a calculator function returned an error during
+  stale-while-revalidate background refresh, the error was cached with full
+  TTL, causing all subsequent readers to receive the error until it expired.
+  Now the stale-but-usable value is preserved, and the next request triggers
+  another background refresh attempt. Once `ExpireAt` is reached, the entry
+  expires naturally and a foreground calculation runs — if that also fails,
+  the caller receives the error directly.
+
+### Features
+
+- Added `Config.OnRefreshError` callback for observability. Called with the
+  cache key and error whenever a background refresh calculation fails and the
+  stale value is preserved. Use it to wire up metrics, logging, or alerting
+  without changing the `Get` return type.
+
+### Tests
+
+- Added `TestBackgroundRefreshErrorPreservesStaleValue` covering the
+  stale-preservation behavior and `OnRefreshError` callback invocation.
+
 ## v4.2.0
 
 ### Features
