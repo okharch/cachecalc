@@ -23,7 +23,7 @@ import (
 // slice and any slices returned by prior reads. Otherwise one caller can
 // silently corrupt the follower's local cache and affect later readers.
 func TestRemoteValueStoreReadThroughCacheClonesSnapshots(t *testing.T) {
-	store := newRemoteValueStore(nil, 0, time.Second)
+	store := newRemoteValueStore(nil, 0, 0, time.Second)
 	original := valuestore.EntrySnapshot{
 		Value:    []byte("alpha"),
 		ExpireAt: time.Now().Add(time.Second),

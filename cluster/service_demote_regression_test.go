@@ -34,8 +34,8 @@ func TestServiceDemoteWaitsForInFlightLeaderPut(t *testing.T) {
 		localValues: blocking,
 		localLocks:  lockmem.NewBackend(),
 		server:      newGRPCServer("127.0.0.1:0"),
-		values:      newRemoteValueStore(fakeLeaderElector{}, 50*time.Millisecond, 0),
-		locks:       newRemoteLockBackend(fakeLeaderElector{}, 50*time.Millisecond),
+		values:      newRemoteValueStore(fakeLeaderElector{}, 50*time.Millisecond, 0, 0),
+		locks:       newRemoteLockBackend(fakeLeaderElector{}, 50*time.Millisecond, 0),
 	}
 	service.isLeader.Store(true)
 
@@ -107,8 +107,8 @@ func TestServiceCloseDoesNotBlockIndefinitelyOnSlowLocalBackend(t *testing.T) {
 		localValues: blocking,
 		localLocks:  lockmem.NewBackend(),
 		server:      newGRPCServer("127.0.0.1:0"),
-		values:      newRemoteValueStore(fakeLeaderElector{}, 50*time.Millisecond, 0),
-		locks:       newRemoteLockBackend(fakeLeaderElector{}, 50*time.Millisecond),
+		values:      newRemoteValueStore(fakeLeaderElector{}, 50*time.Millisecond, 0, 0),
+		locks:       newRemoteLockBackend(fakeLeaderElector{}, 50*time.Millisecond, 0),
 	}
 	service.isLeader.Store(true)
 
@@ -160,8 +160,8 @@ func TestServiceCloseDoesNotBlockIndefinitelyOnSlowLeaderMutation(t *testing.T) 
 		localValues: blocking,
 		localLocks:  lockmem.NewBackend(),
 		server:      newGRPCServer("127.0.0.1:0"),
-		values:      newRemoteValueStore(fakeLeaderElector{}, 50*time.Millisecond, 0),
-		locks:       newRemoteLockBackend(fakeLeaderElector{}, 50*time.Millisecond),
+		values:      newRemoteValueStore(fakeLeaderElector{}, 50*time.Millisecond, 0, 0),
+		locks:       newRemoteLockBackend(fakeLeaderElector{}, 50*time.Millisecond, 0),
 	}
 	service.isLeader.Store(true)
 
@@ -220,8 +220,8 @@ func TestServiceGetDoesNotReturnOldLeaderLocalValueAfterDemotion(t *testing.T) {
 		localValues: blocking,
 		localLocks:  lockmem.NewBackend(),
 		server:      newGRPCServer("127.0.0.1:0"),
-		values:      newRemoteValueStore(fakeLeaderElector{}, 50*time.Millisecond, 0),
-		locks:       newRemoteLockBackend(fakeLeaderElector{}, 50*time.Millisecond),
+		values:      newRemoteValueStore(fakeLeaderElector{}, 50*time.Millisecond, 0, 0),
+		locks:       newRemoteLockBackend(fakeLeaderElector{}, 50*time.Millisecond, 0),
 	}
 	service.isLeader.Store(true)
 

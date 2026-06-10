@@ -122,6 +122,12 @@ func (c *Cache) LocalValues() valuestore.Store {
 	return c.localValues
 }
 
+// RangeLocal iterates all usable entries in the local cache.
+// Iteration stops early if fn returns false.
+func (c *Cache) RangeLocal(fn func(key string, snap valuestore.EntrySnapshot) bool) {
+	c.localValues.(*localValueStore).Range(fn)
+}
+
 func Get[T any](ctx context.Context, cache *Cache, key string, calc CalculateValueWithPolicy[T]) (result T, err error) {
 	req := &request{
 		ctx:   ctx,
@@ -595,4 +601,36 @@ func (s *localValueStore) Delete(_ context.Context, key string) error {
 	delete(s.cache.entries, key)
 	s.cache.mu.Unlock()
 	return nil
+}
+
+func (s *localValueStore) Range(fn func(key string, snap valuestore.EntrySnapshot) bool) {
+	now := time.Now()
+	s.cache.mu.Lock()
+	keys := make([]string, 0, len(s.cache.entries))
+	for k := range s.cache.entries {
+		keys = append(keys, k)
+	}
+	s.cache.mu.Unlock()
+
+	for _, key := range keys {
+		s.cache.mu.Lock()
+		entry, ok := s.cache.entries[key]
+		s.cache.mu.Unlock()
+		if !ok {
+			continue
+		}
+		entry.mu.Lock()
+		snap := entry.snapshot
+		usable := snap.Usable(now)
+		if usable {
+			snap = cloneSnapshot(snap)
+		}
+		entry.mu.Unlock()
+		if !usable {
+			continue
+		}
+		if !fn(key, snap) {
+			return
+		}
+	}
 }

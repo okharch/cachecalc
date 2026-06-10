@@ -42,16 +42,21 @@ func New(ctx context.Context, cfg Config, localValues valuestore.Store, localLoc
 	if err != nil {
 		return nil, err
 	}
+	prefix := "cluster: "
+	if cfg.Name != "" {
+		prefix = "cluster[" + cfg.Name + "]: "
+	}
 	service := &Service{
 		localValues: localValues,
 		localLocks:  localLocks,
 		elector:     elector,
 		server:      newGRPCServer(cfg.GRPCListenAddress),
-		values:      newRemoteValueStore(elector, cfg.DialTimeout, cfg.ReadThroughTTL),
-		locks:       newRemoteLockBackend(elector, cfg.DialTimeout),
-		logger:      log.New(os.Stderr, "cluster: ", log.LstdFlags),
+		values:      newRemoteValueStore(elector, cfg.DialTimeout, cfg.ReconnectBaseDelay, cfg.ReadThroughTTL),
+		locks:       newRemoteLockBackend(elector, cfg.DialTimeout, cfg.ReconnectBaseDelay),
+		logger:      log.New(os.Stderr, prefix, log.LstdFlags|log.Lshortfile),
 	}
 	service.ctx, service.cancel = context.WithCancel(ctx)
+	service.values.ctx = service.ctx
 	if err := elector.Start(service.ctx, service.promote, service.demote); err != nil {
 		return nil, err
 	}
@@ -182,6 +187,15 @@ func (s *Service) withLeaderLocalOp() bool {
 	}
 	s.mu.RUnlock()
 	return false
+}
+
+// SetWarmUpSource configures a function that iterates local cache entries.
+// When a follower connects to a new leader, it streams these entries to warm
+// up the leader's shared value store.
+func (s *Service) SetWarmUpSource(fn func(func(string, valuestore.EntrySnapshot) bool)) {
+	s.values.warmUpSource = fn
+	s.values.isLeader = s.IsLeader
+	s.values.logger = s.logger
 }
 
 func (s *Service) promote() {

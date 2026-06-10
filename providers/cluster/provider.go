@@ -23,6 +23,7 @@ func Bind(ctx context.Context, cache *smartcache.Cache, cfg cluster.Config) (*cl
 	if err != nil {
 		return nil, err
 	}
+	service.SetWarmUpSource(cache.RangeLocal)
 	cache.SetShared(service.LockProvider(), service)
 	if err := waitReady(ctx, service, cfg); err != nil {
 		cache.SetShared(prevLocks, prevValues)

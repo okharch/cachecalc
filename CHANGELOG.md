@@ -2,6 +2,57 @@
 
 All notable changes to this project are documented here.
 
+## v4.4.0
+
+### Features
+
+- **Cache warm-up on leader re-election.** When a cluster leader dies and a new
+  leader is elected, every surviving follower streams its local cache entries to
+  the new leader via a bidirectional gRPC `WarmUp` RPC. The leader accepts
+  entries only when they are newer (by `CreatedAt`) than what it already has,
+  preventing stale overwrites. This dramatically reduces cold-start
+  recomputations after failover.
+  - New protobuf messages: `WarmUpEntry`, `WarmUpSummary`
+    (`cluster/cachepb/cache.proto`).
+  - New server-side handler: `rpcServer.WarmUp` (`cluster/grpc_server.go`).
+  - New client-side streaming: `remoteValueStore.doWarmUp` with automatic
+    re-streaming on gRPC reconnect (`cluster/grpc_client.go`).
+  - New `Cache.RangeLocal()` method to iterate usable local entries
+    (`smartcache/cache.go`).
+  - New `Service.SetWarmUpSource()` to wire the local cache iteration into the
+    cluster service (`cluster/service.go`).
+  - `providers/cluster.Bind()` now calls `SetWarmUpSource` automatically.
+
+- **Leader skips self-warm-up.** A newly elected leader no longer sends a
+  warm-up stream to itself. Previously this produced a harmless but noisy
+  rejected-entry log line on every election.
+
+- **Configurable gRPC reconnect backoff.** Added `Config.ReconnectBaseDelay`
+  (default 1 s) to control the base delay for gRPC client reconnection backoff.
+  Both the value-store and lock-backend clients respect this setting.
+
+- **Node-labeled cluster logging.** Added `Config.Name` field. When set, the
+  cluster logger prefix becomes `cluster[<name>]:` instead of `cluster:`,
+  making multi-node test and production logs easy to distinguish. Log lines
+  also include source file and line number (`log.Lshortfile`) for IDE
+  navigation.
+
+### Bug Fixes
+
+- Fixed warm-up initialization order: the service context and warm-up source
+  are now wired before the elector starts, preventing a race where an early
+  leader promotion could miss the warm-up callback.
+- Fixed gRPC client address tracking: `ensureClient` now detects leader address
+  changes and reconnects instead of reusing a stale connection to the old
+  leader.
+
+### Tests
+
+- Added `TestWarmUpAllFollowers` — a 4-node cluster test that verifies all
+  surviving followers push their entries to the new leader after failover.
+- Updated existing cluster tests to use named node configs for clearer log
+  output.
+
 ## v4.3.0
 
 ### Behavior Change

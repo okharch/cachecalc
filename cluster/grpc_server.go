@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -112,4 +113,38 @@ func (s *rpcServer) Release(ctx context.Context, req *cachepb.ReleaseRequest) (*
 
 func (s *rpcServer) Health(context.Context, *cachepb.Empty) (*cachepb.HealthResponse, error) {
 	return &cachepb.HealthResponse{Leader: true}, nil
+}
+
+func (s *rpcServer) WarmUp(stream grpc.ClientStreamingServer[cachepb.WarmUpEntry, cachepb.WarmUpSummary]) error {
+	var accepted, rejected, total int32
+	for {
+		entry, err := stream.Recv()
+		if err == io.EOF {
+			return stream.SendAndClose(&cachepb.WarmUpSummary{
+				Accepted: accepted, Rejected: rejected, Total: total,
+			})
+		}
+		if err != nil {
+			return err
+		}
+		total++
+
+		snap, err := valuestore.Unmarshal(entry.GetSnapshot())
+		if err != nil {
+			rejected++
+			continue
+		}
+
+		existing, ok, _ := s.values.Get(stream.Context(), entry.GetKey())
+		if ok && !existing.CreatedAt.Before(snap.CreatedAt) {
+			rejected++
+			continue
+		}
+
+		if err := s.values.Put(stream.Context(), entry.GetKey(), snap); err != nil {
+			rejected++
+			continue
+		}
+		accepted++
+	}
 }

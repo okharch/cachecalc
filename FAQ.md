@@ -30,3 +30,41 @@ cache := smartcache.New(smartcache.Config{
 ```
 
 This was changed in v4.3.0. Prior versions replaced the stale entry with an error snapshot, causing all subsequent readers to fail until the error TTL expired.
+
+## On a single instance, does cachecalc use a simple mutex for goroutine coordination?
+
+No. It uses a **channel-based singleflight** pattern, not a plain mutex. Each `localEntry` holds a `wait chan struct{}` field. When the first goroutine requests a key that needs (re)calculation, it creates the channel and starts computing. All subsequent goroutines for the same key see that channel and block on `<-wait`. When the calculation finishes, the channel is closed — waking every waiter at once so they all read the fresh result.
+
+This is more efficient than a mutex: waiters don't compete for a lock, and there's zero re-calculation regardless of how many goroutines pile up.
+
+```go
+// Simplified flow inside smartcache.serve():
+entry := cache.entryFor(key)
+if entry.wait != nil {
+    // Another goroutine is already calculating — just wait
+    <-entry.wait
+    return entry.snapshot
+}
+// First arrival — create channel, start calculation
+entry.wait = make(chan struct{})
+go func() {
+    entry.snapshot = calculate(key)
+    close(entry.wait) // wake all waiters
+}()
+<-entry.wait
+return entry.snapshot
+```
+
+## How does cache warm-up work when a new cluster leader is elected?
+
+When the current leader dies, a new leader is elected via the configured elector (local TCP or Kubernetes Lease). Every surviving follower detects the new leader through gRPC reconnection and automatically streams its local cache entries to the new leader using the `WarmUp` RPC. The leader accepts each entry only if it is newer (by `CreatedAt`) than any existing entry for the same key, so stale values never overwrite fresh ones.
+
+This means the new leader's shared store is populated almost immediately after election — without triggering a wave of cache-miss recomputations. The warm-up happens automatically when you use `providers/cluster.Bind()`; no additional configuration is needed.
+
+The leader itself never sends a warm-up stream to itself — it already has its own local entries.
+
+## Does the in-memory backend store Go values directly without serialization?
+
+No. **All values are gob-serialized to `[]byte`**, even with the in-memory backend. The `EntrySnapshot.Value` field is always `[]byte`, and the memory store holds a `map[string]EntrySnapshot` of these serialized snapshots — the same format used by Redis, Postgres, and every other backend.
+
+This means cached types must be gob-encodable (exported fields, registered interfaces). The upside is a uniform `EntrySnapshot` format across all backends, so you can swap between memory and distributed stores without any code changes. It also means the in-memory store faithfully reproduces the same serialization behavior you'll see in production with a distributed backend.

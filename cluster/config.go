@@ -15,6 +15,7 @@ const (
 
 // Config describes cluster election and gRPC transport settings.
 type Config struct {
+	Name                  string
 	Mode                  string
 	GRPCListenAddress     string
 	LeaderLockAddress     string
@@ -22,6 +23,7 @@ type Config struct {
 	ElectionRetryInterval time.Duration
 	DialTimeout           time.Duration
 	ReadThroughTTL        time.Duration
+	ReconnectBaseDelay   time.Duration
 }
 
 func DefaultConfig() Config {
@@ -32,6 +34,7 @@ func DefaultConfig() Config {
 		ElectionRetryInterval: 500 * time.Millisecond,
 		DialTimeout:           time.Second,
 		ReadThroughTTL:        2 * time.Second,
+		ReconnectBaseDelay:   time.Second,
 	}
 }
 

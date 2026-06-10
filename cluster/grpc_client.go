@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 	"github.com/okharch/cachecalc/v4/valuestore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
@@ -20,21 +23,28 @@ type readThroughEntry struct {
 }
 
 type remoteValueStore struct {
-	elector     LeaderElector
-	dialTimeout time.Duration
-	cacheTTL    time.Duration
-	mu          sync.Mutex
-	conn        *grpc.ClientConn
-	client      cachepb.ClusterServiceClient
-	cache       map[string]readThroughEntry
+	elector            LeaderElector
+	dialTimeout        time.Duration
+	reconnectBaseDelay time.Duration
+	cacheTTL           time.Duration
+	mu                 sync.Mutex
+	conn               *grpc.ClientConn
+	connAddr           string
+	client             cachepb.ClusterServiceClient
+	cache              map[string]readThroughEntry
+	warmUpSource       func(func(string, valuestore.EntrySnapshot) bool)
+	isLeader           func() bool
+	logger             *log.Logger
+	ctx                context.Context
 }
 
-func newRemoteValueStore(elector LeaderElector, dialTimeout, cacheTTL time.Duration) *remoteValueStore {
+func newRemoteValueStore(elector LeaderElector, dialTimeout, reconnectBaseDelay, cacheTTL time.Duration) *remoteValueStore {
 	return &remoteValueStore{
-		elector:     elector,
-		dialTimeout: dialTimeout,
-		cacheTTL:    cacheTTL,
-		cache:       make(map[string]readThroughEntry),
+		elector:            elector,
+		dialTimeout:        dialTimeout,
+		reconnectBaseDelay: reconnectBaseDelay,
+		cacheTTL:           cacheTTL,
+		cache:              make(map[string]readThroughEntry),
 	}
 }
 
@@ -110,22 +120,112 @@ func (s *remoteValueStore) Close() error {
 func (s *remoteValueStore) ensureClient(ctx context.Context) (cachepb.ClusterServiceClient, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.conn != nil {
-		return s.client, nil
-	}
 	addr := s.elector.LeaderAddress()
 	if addr == "" {
 		return nil, fmt.Errorf("leader address is unknown")
 	}
+	if s.conn != nil && s.connAddr == addr {
+		return s.client, nil
+	}
+	if s.conn != nil {
+		_ = s.conn.Close()
+		s.conn = nil
+		s.client = nil
+		s.connAddr = ""
+		s.cache = make(map[string]readThroughEntry)
+	}
 	dialCtx, cancel := context.WithTimeout(ctx, s.dialTimeout)
 	defer cancel()
-	conn, err := grpc.DialContext(dialCtx, addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
+	dialOpts := []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+	}
+	if s.reconnectBaseDelay > 0 {
+		bc := backoff.DefaultConfig
+		bc.BaseDelay = s.reconnectBaseDelay
+		dialOpts = append(dialOpts, grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff: bc,
+		}))
+	}
+	conn, err := grpc.DialContext(dialCtx, addr, dialOpts...)
 	if err != nil {
 		return nil, err
 	}
 	s.conn = conn
+	s.connAddr = addr
 	s.client = cachepb.NewClusterServiceClient(conn)
+	if s.warmUpSource != nil {
+		go s.doWarmUp(s.client)
+		go s.watchReconnect(s.ctx, conn, s.client)
+	}
 	return s.client, nil
+}
+
+func (s *remoteValueStore) watchReconnect(ctx context.Context, conn *grpc.ClientConn, client cachepb.ClusterServiceClient) {
+	for ctx.Err() == nil {
+		state := conn.GetState()
+		if state == connectivity.Idle {
+			conn.Connect()
+		}
+		if !conn.WaitForStateChange(ctx, state) {
+			return
+		}
+		s.mu.Lock()
+		sameConn := s.conn == conn
+		s.mu.Unlock()
+		if !sameConn {
+			return
+		}
+		newState := conn.GetState()
+		if newState == connectivity.Ready && state != connectivity.Ready {
+			go s.doWarmUp(client)
+		}
+	}
+}
+
+func (s *remoteValueStore) doWarmUp(client cachepb.ClusterServiceClient) {
+	if s.isLeader != nil && s.isLeader() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	stream, err := client.WarmUp(ctx)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Printf("warm-up: failed to open stream: %v", err)
+		}
+		return
+	}
+
+	var sent int
+	s.warmUpSource(func(key string, snap valuestore.EntrySnapshot) bool {
+		buf, err := valuestore.Marshal(snap)
+		if err != nil {
+			return true
+		}
+		err = stream.Send(&cachepb.WarmUpEntry{
+			Key:            key,
+			Snapshot:       buf,
+			CreatedAtNanos: snap.CreatedAt.UnixNano(),
+		})
+		if err == nil {
+			sent++
+		}
+		return err == nil
+	})
+
+	summary, err := stream.CloseAndRecv()
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Printf("warm-up: sent %d entries, stream error: %v", sent, err)
+		}
+		return
+	}
+	if s.logger != nil {
+		s.logger.Printf("warm-up: sent %d, accepted %d, rejected %d",
+			sent, summary.GetAccepted(), summary.GetRejected())
+	}
 }
 
 func (s *remoteValueStore) handleError(err error) error {
@@ -181,15 +281,16 @@ func cloneEntrySnapshot(entry valuestore.EntrySnapshot) valuestore.EntrySnapshot
 }
 
 type remoteLockBackend struct {
-	elector     LeaderElector
-	dialTimeout time.Duration
-	mu          sync.Mutex
-	conn        *grpc.ClientConn
-	client      cachepb.ClusterServiceClient
+	elector            LeaderElector
+	dialTimeout        time.Duration
+	reconnectBaseDelay time.Duration
+	mu                 sync.Mutex
+	conn               *grpc.ClientConn
+	client             cachepb.ClusterServiceClient
 }
 
-func newRemoteLockBackend(elector LeaderElector, dialTimeout time.Duration) *remoteLockBackend {
-	return &remoteLockBackend{elector: elector, dialTimeout: dialTimeout}
+func newRemoteLockBackend(elector LeaderElector, dialTimeout, reconnectBaseDelay time.Duration) *remoteLockBackend {
+	return &remoteLockBackend{elector: elector, dialTimeout: dialTimeout, reconnectBaseDelay: reconnectBaseDelay}
 }
 
 func (b *remoteLockBackend) TryAcquire(ctx context.Context, key string, token []byte, ttl time.Duration) (bool, error) {
@@ -252,7 +353,18 @@ func (b *remoteLockBackend) ensureClient(ctx context.Context) (cachepb.ClusterSe
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, b.dialTimeout)
 	defer cancel()
-	conn, err := grpc.DialContext(dialCtx, addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
+	dialOpts := []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+	}
+	if b.reconnectBaseDelay > 0 {
+		bc := backoff.DefaultConfig
+		bc.BaseDelay = b.reconnectBaseDelay
+		dialOpts = append(dialOpts, grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff: bc,
+		}))
+	}
+	conn, err := grpc.DialContext(dialCtx, addr, dialOpts...)
 	if err != nil {
 		return nil, err
 	}

@@ -24,7 +24,9 @@ func TestPromotedLeaderServesWarmLocalValue(t *testing.T) {
 	defer cancel()
 
 	cacheA := smartcache.New(smartcache.Config{MaxWorkers: 2})
-	serviceA, err := pcluster.Bind(ctx, cacheA, cfg)
+	cfgA := cfg
+	cfgA.Name = "A"
+	serviceA, err := pcluster.Bind(ctx, cacheA, cfgA)
 	if err != nil {
 		t.Fatalf("bind first cache: %v", err)
 	}
@@ -32,7 +34,9 @@ func TestPromotedLeaderServesWarmLocalValue(t *testing.T) {
 	defer cacheA.Close()
 
 	cacheB := smartcache.New(smartcache.Config{MaxWorkers: 2})
-	serviceB, err := pcluster.Bind(ctx, cacheB, cfg)
+	cfgB := cfg
+	cfgB.Name = "B"
+	serviceB, err := pcluster.Bind(ctx, cacheB, cfgB)
 	if err != nil {
 		t.Fatalf("bind second cache: %v", err)
 	}
@@ -72,7 +76,9 @@ func TestPromotedLeaderServesWarmLocalValue(t *testing.T) {
 	}
 
 	cacheC := smartcache.New(smartcache.Config{MaxWorkers: 2})
-	serviceC, err := pcluster.Bind(ctx, cacheC, cfg)
+	cfgC := cfg
+	cfgC.Name = "C"
+	serviceC, err := pcluster.Bind(ctx, cacheC, cfgC)
 	if err != nil {
 		t.Fatalf("bind third cache: %v", err)
 	}
