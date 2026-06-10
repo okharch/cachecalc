@@ -63,6 +63,26 @@ This means the new leader's shared store is populated almost immediately after e
 
 The leader itself never sends a warm-up stream to itself — it already has its own local entries.
 
+## Where does the MongoDB provider store data, and how do I protect it?
+
+The MongoDB provider uses a hardcoded database `smartcache` with two collections: `values` (cached entries) and `locks` (distributed locks). Both have TTL indexes on the `expire_at` field for automatic cleanup.
+
+The names are not currently configurable, but you can protect the data at the MongoDB level:
+
+- **RBAC** — create a dedicated MongoDB user with `readWrite` access limited to the `smartcache` database. Avoid granting `dbAdmin` or `drop` privileges so that manual or accidental deletions cannot remove the collections.
+- **Network isolation** — bind MongoDB to internal interfaces, enable TLS, and restrict access with firewall rules so only your application nodes can connect.
+- **Client-side field-level encryption** — if the cached data is sensitive, MongoDB supports encrypting individual fields before they reach the server.
+
+```js
+// Example: create a restricted user in the mongo shell
+use smartcache
+db.createUser({
+  user: "cacheapp",
+  pwd: "...",
+  roles: [{ role: "readWrite", db: "smartcache" }]
+})
+```
+
 ## Does the in-memory backend store Go values directly without serialization?
 
 No. **All values are gob-serialized to `[]byte`**, even with the in-memory backend. The `EntrySnapshot.Value` field is always `[]byte`, and the memory store holds a `map[string]EntrySnapshot` of these serialized snapshots — the same format used by Redis, Postgres, and every other backend.

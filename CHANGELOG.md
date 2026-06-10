@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## v4.4.1
+
+### Documentation
+
+- Added `providers/README.md` with a comparison table, usage examples, and
+  guidance on choosing a provider by use case.
+- Added FAQ entry explaining MongoDB storage layout (`smartcache.values` /
+  `smartcache.locks` collections) and protection strategies (RBAC, network
+  isolation, client-side field-level encryption).
+
 ## v4.4.0
 
 ### Features
